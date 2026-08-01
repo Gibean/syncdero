@@ -1,0 +1,22 @@
+services:
+  syncdero:
+    build: .
+    container_name: syncdero
+    ports:
+      - "8088:8088"
+    volumes:
+      - ./migrations:/app/migrations
+      - ./backups:/app/backups
+      - ./.git:/app/.git:ro
+    environment:
+      - SYNCDERO_APPLY_PASSWORD=secret
+      - MARIADB_HOST=mariadb
+      - MARIADB_PORT=3306
+      - MARIADB_DATABASE=app_db
+      - MARIADB_USER=root
+      - MARIADB_PASSWORD=root
+      - PG_HOST=postgres
+      - PG_PORT=5432
+      - PG_USER=postgres
+      - PG_PASSWORD=postgres
+    restart: unless-stopped

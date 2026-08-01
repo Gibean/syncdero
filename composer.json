@@ -1,0 +1,22 @@
+{
+    "name": "syncdero/syncdero",
+    "description": "Git-like Database Version Control, Schema Monitoring & Migration Engine",
+    "type": "project",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "SYNCDERO Team"
+        }
+    ],
+    "require": {
+        "php": ">=8.2"
+    },
+    "autoload": {
+        "psr-4": {
+            "Syncdero\\": "src/"
+        }
+    },
+    "bin": [
+        "bin/syncdero"
+    ]
+}

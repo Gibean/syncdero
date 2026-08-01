@@ -1,0 +1,233 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+// SYNCDERO CLI Runner
+// Compatible con PHP 8.2+ en Windows, Linux y Docker
+
+$autoloadPaths = [
+    __DIR__ . '/../vendor/autoload.php',
+    __DIR__ . '/../src/autoload.php',
+];
+
+$loaded = false;
+foreach ($autoloadPaths as $path) {
+    if (file_exists($path)) {
+        require_once $path;
+        $loaded = true;
+        break;
+    }
+}
+
+if (!$loaded) {
+    fwrite(STDERR, "Error: No se pudo cargar el autoloader de SYNCDERO.\n");
+    exit(1);
+}
+
+use Syncdero\Core\Config;
+use Syncdero\Core\StateEngine;
+use Syncdero\Drivers\DriverFactory;
+
+$configPath = getenv('SYNCDERO_CONFIG') ?: (__DIR__ . '/../config/syncdero.php');
+if (!file_exists($configPath)) {
+    // Si no existe, revisar en public/config.php legacy
+    $configPath = __DIR__ . '/../public/config.php';
+}
+
+$config = Config::load($configPath);
+$stateEngine = new StateEngine($config->getMigrationsDir(), $config->getRepoDir());
+
+$args = array_slice($argv, 1);
+$command = $args[0] ?? 'status';
+
+function printHeader(): void {
+    echo "\033[1;36m";
+    echo "========================================================\n";
+    echo "  SYNCDERO - Git-Like Database Version Control v1.0.0   \n";
+    echo "========================================================\n";
+    echo "\033[0m";
+}
+
+function printHelp(): void {
+    printHeader();
+    echo "Uso:\n";
+    echo "  php bin/syncdero <comando> [opciones]\n\n";
+    echo "Comandos disponibles:\n";
+    echo "  \033[1;32mstatus\033[0m     Muestra el estado de sincronización de todos los entornos.\n";
+    echo "             Opciones: --fail-on-divergence, --format=json\n";
+    echo "  \033[1;32msync\033[0m       Aplica las migraciones pendientes en un entorno específico.\n";
+    echo "             Uso: php bin/syncdero sync <entorno> [--dry-run] [--no-backup]\n";
+    echo "  \033[1;32mdiff\033[0m       Muestra el diff y contenido de migraciones pendientes o conflictivas.\n";
+    echo "             Uso: php bin/syncdero diff <entorno>\n";
+    echo "  \033[1;32mbackup\033[0m     Genera un snapshot manual del entorno indicado.\n";
+    echo "             Uso: php bin/syncdero backup <entorno>\n\n";
+}
+
+// Ejecución de comandos
+switch ($command) {
+    case 'help':
+    case '--help':
+    case '-h':
+        printHelp();
+        exit(0);
+
+    case 'status':
+        $failOnDivergence = in_array('--fail-on-divergence', $args, true);
+        $asJson = in_array('--format=json', $args, true);
+
+        $results = [];
+        $hasAnyDivergence = false;
+        $environments = $config->getEnvironments();
+
+        foreach ($environments as $envKey => $envConfig) {
+            try {
+                $driver = DriverFactory::create($envConfig);
+                $connected = $driver->testConnection();
+
+                if (!$connected) {
+                    $results[$envKey] = [
+                        'status' => 'DISCONNECTED',
+                        'error' => 'No se pudo conectar a la base de datos',
+                    ];
+                    continue;
+                }
+
+                $inspection = $stateEngine->inspectEnvironment($driver);
+                if ($inspection['has_divergence']) {
+                    $hasAnyDivergence = true;
+                }
+
+                $results[$envKey] = [
+                    'label' => $envConfig['label'] ?? $envKey,
+                    'driver' => $driver->getName(),
+                    'role' => $envConfig['role'] ?? 'dev',
+                    'is_synced' => $inspection['is_synced'],
+                    'has_divergence' => $inspection['has_divergence'],
+                    'total_disk' => $inspection['total_disk'],
+                    'total_applied' => $inspection['total_applied'],
+                    'pending_count' => count($inspection['pending']),
+                    'divergent_count' => count($inspection['divergent']),
+                    'pending' => array_keys($inspection['pending']),
+                    'divergent' => array_keys($inspection['divergent']),
+                ];
+            } catch (\Throwable $e) {
+                $results[$envKey] = [
+                    'status' => 'ERROR',
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        if ($asJson) {
+            echo json_encode(['syncdero' => $results], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+        } else {
+            printHeader();
+            $git = $stateEngine->getGitInfo();
+            echo "Git Branch: \033[1;33m{$git['branch']}\033[0m | Commit: \033[1;33m{$git['commit']}\033[0m\n";
+            echo "Directorio de migraciones: \033[0;37m" . $config->getMigrationsDir() . "\033[0m\n\n";
+
+            printf("%-18s %-10s %-12s %-10s %-12s %s\n", "ENTORNO", "DRIVER", "ROL", "APLICADAS", "PENDIENTES", "ESTADO");
+            echo str_repeat("-", 75) . "\n";
+
+            foreach ($results as $envKey => $res) {
+                if (isset($res['error'])) {
+                    printf("%-18s %-10s %-12s %-10s %-12s \033[1;31m%s\033[0m\n", $envKey, "-", "-", "-", "-", "ERROR: " . $res['error']);
+                    continue;
+                }
+
+                $statusStr = "\033[1;32mSINCRONIZADO\033[0m";
+                if ($res['has_divergence']) {
+                    $statusStr = "\033[1;31mCONFLICTO (DIVERGENTE)\033[0m";
+                } elseif ($res['pending_count'] > 0) {
+                    $statusStr = "\033[1;33mATRASADO (-{$res['pending_count']})\033[0m";
+                }
+
+                printf(
+                    "%-18s %-10s %-12s %-10s %-12s %s\n",
+                    $envKey,
+                    $res['driver'],
+                    strtoupper($res['role']),
+                    $res['total_applied'] . "/" . $res['total_disk'],
+                    $res['pending_count'],
+                    $statusStr
+                );
+            }
+            echo "\n";
+        }
+
+        if ($failOnDivergence && $hasAnyDivergence) {
+            fwrite(STDERR, "\033[1;31m[ERROR CI/CD] Se detectaron divergencias de hash en las bases de datos.\033[0m\n");
+            exit(1);
+        }
+        exit(0);
+
+    case 'sync':
+        $targetEnv = $args[1] ?? null;
+        if (!$targetEnv) {
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno a sincronizar. Ej: php bin/syncdero sync mariadb_local\033[0m\n");
+            exit(1);
+        }
+
+        $envConfig = $config->getEnvironment($targetEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado en la configuración.\033[0m\n");
+            exit(1);
+        }
+
+        $dryRun = in_array('--dry-run', $args, true);
+        $noBackup = in_array('--no-backup', $args, true);
+
+        printHeader();
+        echo "Iniciando sincronización para: \033[1;33m{$targetEnv}\033[0m\n";
+
+        $driver = DriverFactory::create($envConfig);
+        $inspection = $stateEngine->inspectEnvironment($driver);
+
+        if ($inspection['has_divergence']) {
+            fwrite(STDERR, "\033[1;31mABORTANDO: El entorno tiene migraciones con hash divergente (archivos modificados).\033[0m\n");
+            exit(1);
+        }
+
+        $pending = $inspection['pending'];
+        if (empty($pending)) {
+            echo "\033[1;32m¡La base de datos ya está completamente al día! No hay pendientes.\033[0m\n";
+            exit(0);
+        }
+
+        echo "Migraciones pendientes a aplicar: " . count($pending) . "\n";
+        foreach ($pending as $item) {
+            echo "  - {$item['file']->filename} (" . strtoupper($item['file']->type) . ")\n";
+        }
+
+        if ($dryRun) {
+            echo "\033[1;36m[DRY RUN] Simulación finalizada. Ningún cambio fue ejecutado.\033[0m\n";
+            exit(0);
+        }
+
+        // Crear respaldo automático previo
+        if (!$noBackup) {
+            echo "Creando respaldo de seguridad previo...";
+            $backupRes = $driver->createBackup($config->getBackupDir());
+            if ($backupRes['success']) {
+                echo " \033[1;32mOK\033[0m ({$backupRes['path']})\n";
+            } else {
+                echo " \033[1;33mAVISO: {$backupRes['message']}\033[0m\n";
+            }
+        }
+
+        echo "Aplicando lote de migraciones...\n";
+        $syncResult = $stateEngine->syncPending($driver, $pending, 'cli_user');
+
+        if ($syncResult['success']) {
+            echo "\033[1;32m✓ Sincronización exitosa: {$syncResult['applied_count']} migraciones en {$syncResult['duration_ms']}ms (Batch #{$syncResult['batch']})\033[0m\n";
+            exit(0);
+        } else {
+            fwrite(STDERR, "\033[1;31m✗ Falló la migración: " . json_encode($syncResult['errors']) . "\033[0m\n");
+            exit(1);
+        }
+
+    default:
+        fwrite(STDERR, "Comando desconocido: '{$command}'. Ejecute 'php bin/syncdero --help' para ayuda.\n");
+        exit(1);
+}

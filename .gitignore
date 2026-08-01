@@ -1,0 +1,40 @@
+# Entornos locales y credenciales sensibles
+.env
+.env.local
+.env.*.local
+config/syncdero.local.php
+
+# Backups y volcados de bases de datos
+backups/*
+!backups/.gitkeep
+*.sql.gz
+*.dump
+
+# Base de datos SQLite local
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs y temporales
+*.log
+scratch/
+tmp/
+temp/
+
+# Dependencias de Composer
+/vendor/
+composer.lock
+
+# Archivos de IDE y sistema operativo
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+.DS_Store
+Thumbs.db
+
+# Planes y borradores internos de diseño
+*.plan.md
+db_git_migration_manager_plan.md
