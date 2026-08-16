@@ -34,7 +34,32 @@ class Config
 
     public function getEnvironments(): array
     {
-        return $this->data['environments'] ?? [];
+        $envs = $this->data['environments'] ?? [];
+        $servers = $this->data['servers'] ?? [];
+
+        foreach ($servers as $serverKey => $serverConfig) {
+            if (!empty($serverConfig['auto_discover'])) {
+                try {
+                    $driver = \Syncdero\Drivers\DriverFactory::create($serverConfig);
+                    if ($driver->testConnection()) {
+                        $databases = $driver->discoverDatabases();
+                        foreach ($databases as $dbName) {
+                            $dynKey = "{$serverKey}__{$dbName}";
+                            $envs[$dynKey] = array_merge($serverConfig, [
+                                'label' => ($serverConfig['label'] ?? $serverKey) . ": {$dbName}",
+                                'database' => $dbName,
+                                'is_discovered' => true,
+                                'server_key' => $serverKey,
+                            ]);
+                        }
+                    }
+                } catch (\Throwable $e) {
+                    // Silencioso si el servidor remoto no responde
+                }
+            }
+        }
+
+        return $envs;
     }
 
     public function getEnvironment(string $name): ?array
@@ -42,6 +67,7 @@ class Config
         $envs = $this->getEnvironments();
         return $envs[$name] ?? null;
     }
+
 
     public function getMigrationsDir(): string
     {

@@ -57,4 +57,12 @@ interface DriverInterface
      * @return array{success: bool, path: string, message: string}
      */
     public function createBackup(string $targetDirectory): array;
+
+    /**
+     * Descubre las bases de datos disponibles en el servidor conectado (estilo HeidiSQL).
+     * @return array<string>
+     */
+    public function discoverDatabases(): array;
 }
+
+

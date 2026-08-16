@@ -7,7 +7,9 @@ document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initDraggableNodes();
     updateConnectionWires();
+    initLazyStatusChecker();
 });
+
 
 // 1. Theme Management (Light Mode Default with Alt Dark Mode)
 function initThemeToggle() {
@@ -146,3 +148,43 @@ function closeSyncModal() {
     const modal = document.getElementById('syncModal');
     if (modal) modal.classList.remove('open');
 }
+
+// 4. Lazy Asynchronous Background Status Checker (HeidiSQL style, zero UI freeze)
+function initLazyStatusChecker() {
+    const envLinks = document.querySelectorAll('.env-nav-item');
+    envLinks.forEach(link => {
+        const envKey = link.dataset.envKey;
+        const badge = document.getElementById(`badge-${envKey}`);
+        if (!envKey || !badge) return;
+
+        // Si es el activo ya cargó, para los demás consultamos suavemente en segundo plano
+        if (link.classList.contains('active')) {
+            badge.className = 'status-badge badge-sync';
+            badge.textContent = 'ACTIVO';
+            return;
+        }
+
+        fetch(`/?api_status=${encodeURIComponent(envKey)}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.status === 'synced') {
+                    badge.className = 'status-badge badge-sync';
+                    badge.textContent = 'SYNC';
+                } else if (data.status === 'behind') {
+                    badge.className = 'status-badge badge-warn';
+                    badge.textContent = `-${data.pending}`;
+                } else if (data.status === 'conflict') {
+                    badge.className = 'status-badge badge-danger';
+                    badge.textContent = 'DRIFT';
+                } else {
+                    badge.className = 'status-badge badge-muted';
+                    badge.textContent = 'OFF';
+                }
+            })
+            .catch(() => {
+                badge.className = 'status-badge badge-muted';
+                badge.textContent = 'OFF';
+            });
+    });
+}
+

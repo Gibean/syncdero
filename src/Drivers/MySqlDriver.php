@@ -23,17 +23,44 @@ class MySqlDriver extends AbstractDriver
         $charset = $this->config['charset'] ?? 'utf8mb4';
         $user = $this->config['user'] ?? 'root';
         $password = $this->config['password'] ?? '';
+        $timeout = (int)($this->config['timeout'] ?? 5);
 
-        $dsn = "mysql:host={$host};port={$port};dbname={$dbname};charset={$charset}";
+        $dsn = "mysql:host={$host};port={$port};charset={$charset}";
+        if ($dbname !== '') {
+            $dsn .= ";dbname={$dbname}";
+        }
+
         $options = [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
             \PDO::ATTR_EMULATE_PREPARES => false,
+            \PDO::ATTR_TIMEOUT => $timeout,
         ];
 
         $this->pdo = new \PDO($dsn, $user, $password, $options);
         return $this->pdo;
     }
+
+    public function discoverDatabases(): array
+    {
+        try {
+            $pdo = $this->getPdo();
+            $stmt = $pdo->query("
+                SHOW DATABASES 
+                WHERE `Database` NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
+            ");
+
+            $databases = [];
+            while ($row = $stmt->fetch(\PDO::FETCH_NUM)) {
+                $databases[] = $row[0];
+            }
+            sort($databases);
+            return $databases;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
 
     public function ensureMetadataTable(): void
     {

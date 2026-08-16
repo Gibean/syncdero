@@ -35,6 +35,13 @@ class SqliteDriver extends AbstractDriver
         return $this->pdo;
     }
 
+    public function discoverDatabases(): array
+    {
+        $db = $this->config['database'] ?? '';
+        return ($db !== '' && $db !== ':memory:') ? [basename($db)] : [];
+    }
+
+
     public function ensureMetadataTable(): void
     {
         $pdo = $this->getPdo();

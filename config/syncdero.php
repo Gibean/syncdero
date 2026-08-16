@@ -17,22 +17,33 @@ return [
     // Seguridad para ambientes protegidos
     'apply_password' => getenv('SYNCDERO_APPLY_PASSWORD') ?: '',
 
-    // Ambientes gestionados (Bases de datos tipo Git Remotes/Branches)
+    // Instancias de Servidores con Auto-Discovery (Estilo HeidiSQL)
+    // Permite descubrir automáticamente todas las bases de datos de un host
+    'servers' => [
+        'mariadb_host' => [
+            'label'         => 'MariaDB Host',
+            'driver'        => 'mysql',
+            'host'          => getenv('MARIADB_HOST') ?: '127.0.0.1',
+            'port'          => (int)(getenv('MARIADB_PORT') ?: 3306),
+            'user'          => getenv('MARIADB_USER') ?: 'root',
+            'password'      => getenv('MARIADB_PASSWORD') ?: '',
+            'auto_discover' => true, // Activa el auto-discovery con SHOW DATABASES
+            'protected'     => false,
+            'role'          => 'dev',
+        ],
+    ],
+
+    // Ambientes fijos y específicos
     'environments' => [
-        // Ejemplo MariaDB / MySQL local (para correr standalone en Windows o Docker)
-        'mariadb_local' => [
-            'label'     => 'MariaDB Local',
-            'driver'    => 'mysql',
-            'host'      => getenv('MARIADB_HOST') ?: '127.0.0.1',
-            'port'      => (int)(getenv('MARIADB_PORT') ?: 3306),
-            'database'  => getenv('MARIADB_DATABASE') ?: 'syncdero_demo',
-            'user'      => getenv('MARIADB_USER') ?: 'root',
-            'password'  => getenv('MARIADB_PASSWORD') ?: '',
+        // Entorno SQLite local siempre disponible y ligero
+        'sqlite_demo' => [
+            'label'     => 'SQLite Demo Local',
+            'driver'    => 'sqlite',
+            'database'  => __DIR__ . '/../backups/demo.sqlite',
             'protected' => false,
             'role'      => 'dev',
-            'color'     => '#10b981', // verde
-            'icon'      => '●',
         ],
+
 
         // Ejemplo PostgreSQL (compatible con tu contenedor advdev-postgres actual)
         'pg_main' => [

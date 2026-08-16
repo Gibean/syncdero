@@ -19,19 +19,43 @@ class PostgresDriver extends AbstractDriver
 
         $host = $this->config['host'] ?? '127.0.0.1';
         $port = $this->config['port'] ?? 5432;
-        $dbname = $this->config['database'] ?? '';
+        $dbname = $this->config['database'] ?: 'postgres';
         $user = $this->config['user'] ?? 'postgres';
         $password = $this->config['password'] ?? '';
+        $timeout = (int)($this->config['timeout'] ?? 5);
 
-        $dsn = "pgsql:host={$host};port={$port};dbname={$dbname}";
+        $dsn = "pgsql:host={$host};port={$port};dbname={$dbname};connect_timeout={$timeout}";
         $options = [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
+            \PDO::ATTR_TIMEOUT => $timeout,
         ];
 
         $this->pdo = new \PDO($dsn, $user, $password, $options);
         return $this->pdo;
     }
+
+    public function discoverDatabases(): array
+    {
+        try {
+            $pdo = $this->getPdo();
+            $stmt = $pdo->query("
+                SELECT datname 
+                FROM pg_database 
+                WHERE datistemplate = false AND datname NOT IN ('postgres')
+                ORDER BY datname ASC
+            ");
+
+            $databases = [];
+            while ($row = $stmt->fetch(\PDO::FETCH_NUM)) {
+                $databases[] = $row[0];
+            }
+            return $databases;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
 
     public function ensureMetadataTable(): void
     {

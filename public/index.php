@@ -85,26 +85,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
     }
 }
 
-// Resumen de entornos para la barra lateral
-$sidebarSummary = [];
-foreach ($environments as $key => $envConfig) {
+// Endpoint API JSON liviano para chequear un entorno bajo demanda sin congelar la UI
+if (isset($_GET['api_status'])) {
+    header('Content-Type: application/json');
+    $checkKey = $_GET['api_status'];
+    $envConfig = $environments[$checkKey] ?? null;
+    if (!$envConfig) {
+        echo json_encode(['status' => 'offline', 'error' => 'Entorno no configurado']);
+        exit;
+    }
     try {
         $d = DriverFactory::create($envConfig);
         if ($d->testConnection()) {
             $insp = $stateEngine->inspectEnvironment($d);
-            $sidebarSummary[$key] = [
+            echo json_encode([
                 'status' => $insp['has_divergence'] ? 'conflict' : ($insp['is_synced'] ? 'synced' : 'behind'),
                 'pending' => count($insp['pending']),
                 'applied' => $insp['total_applied'],
                 'total' => $insp['total_disk'],
-            ];
+            ]);
         } else {
-            $sidebarSummary[$key] = ['status' => 'offline', 'pending' => 0, 'applied' => 0, 'total' => 0];
+            echo json_encode(['status' => 'offline', 'error' => 'No conectado']);
         }
     } catch (\Throwable $e) {
-        $sidebarSummary[$key] = ['status' => 'offline', 'pending' => 0, 'applied' => 0, 'total' => 0];
+        echo json_encode(['status' => 'offline', 'error' => $e->getMessage()]);
     }
+    exit;
 }
+
+// Resumen ligero de entornos para la barra lateral (Lazy / Sin bloquear la página)
+$sidebarSummary = [];
+foreach ($environments as $key => $envConfig) {
+    // Solo el entorno actualmente activo se inspecciona síncronamente, los demás cargan al instante
+    $sidebarSummary[$key] = [
+        'status' => ($key === $selectedEnvKey) ? 'checking' : 'ready',
+        'pending' => 0,
+        'applied' => 0,
+        'total' => 0,
+    ];
+}
+
 
 // Datos detallados del entorno activo
 $activeInspection = null;
@@ -265,22 +285,17 @@ $divergentList = $activeInspection['divergent'] ?? [];
                         $isActive = ($envKey === $selectedEnvKey);
                     ?>
                     <li>
-                        <a href="?env=<?= urlencode($envKey) ?>" class="env-nav-item <?= $isActive ? 'active' : '' ?>">
+                        <a href="?env=<?= urlencode($envKey) ?>" class="env-nav-item <?= $isActive ? 'active' : '' ?>" data-env-key="<?= htmlspecialchars($envKey) ?>">
                             <div class="env-item-meta">
                                 <svg class="icon" style="opacity: 0.6;"><use href="#icon-database"></use></svg>
                                 <span><?= htmlspecialchars($env['label'] ?? $envKey) ?></span>
                             </div>
-                            <?php if ($summary['status'] === 'synced'): ?>
-                                <span class="status-badge badge-sync">SYNC</span>
-                            <?php elseif ($summary['status'] === 'behind'): ?>
-                                <span class="status-badge badge-warn">-<?= $summary['pending'] ?></span>
-                            <?php elseif ($summary['status'] === 'conflict'): ?>
-                                <span class="status-badge badge-danger">DRIFT</span>
-                            <?php else: ?>
-                                <span class="status-badge badge-muted">OFF</span>
-                            <?php endif; ?>
+                            <span class="status-badge badge-muted env-status-pill" id="badge-<?= htmlspecialchars($envKey) ?>">
+                                <?= $isActive ? 'ACTIVO' : 'CONECTAR' ?>
+                            </span>
                         </a>
                     </li>
+
                 <?php endforeach; ?>
             </ul>
 
