@@ -138,7 +138,7 @@ function updateConnectionWires() {
     svg.innerHTML = pathsHtml;
 }
 
-// Modal
+// Modales
 function openSyncModal() {
     const modal = document.getElementById('syncModal');
     if (modal) modal.classList.add('open');
@@ -148,6 +148,17 @@ function closeSyncModal() {
     const modal = document.getElementById('syncModal');
     if (modal) modal.classList.remove('open');
 }
+
+function openServerModal() {
+    const modal = document.getElementById('serverModal');
+    if (modal) modal.classList.add('open');
+}
+
+function closeServerModal() {
+    const modal = document.getElementById('serverModal');
+    if (modal) modal.classList.remove('open');
+}
+
 
 // 4. Lazy Asynchronous Background Status Checker (HeidiSQL style, zero UI freeze)
 function initLazyStatusChecker() {

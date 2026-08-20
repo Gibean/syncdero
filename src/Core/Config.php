@@ -84,8 +84,32 @@ class Config
         return $this->data['repo_dir'] ?? './.git';
     }
 
+    public function getServers(): array
+    {
+        return $this->data['servers'] ?? [];
+    }
+
     public function getApplyPassword(): string
     {
         return $this->data['apply_password'] ?? '';
     }
+
+    public function saveServer(string $serverKey, array $serverConfig, string $savePath): void
+    {
+        $this->data['servers'][$serverKey] = $serverConfig;
+        $this->persist($savePath);
+    }
+
+    public function deleteServer(string $serverKey, string $savePath): void
+    {
+        unset($this->data['servers'][$serverKey]);
+        $this->persist($savePath);
+    }
+
+    protected function persist(string $filePath): void
+    {
+        $content = "<?php\n\ndeclare(strict_types=1);\n\nreturn " . var_export($this->data, true) . ";\n";
+        file_put_contents($filePath, $content, LOCK_EX);
+    }
 }
+

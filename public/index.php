@@ -73,17 +73,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
                 }
             }
         }
-    } elseif ($action === 'backup') {
-        $backupRes = $driver->createBackup($config->getBackupDir());
-        if ($backupRes['success']) {
-            $message = "Snapshot generado: " . basename($backupRes['path']);
-            $messageType = 'success';
-        } else {
-            $message = "Fallo al crear snapshot: " . $backupRes['message'];
+    } elseif ($action === 'save_server') {
+        $serverKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower(trim($_POST['server_key'] ?? 'server_' . time())));
+        $serverConfig = [
+            'label'         => trim($_POST['server_label'] ?? $serverKey),
+            'driver'        => trim($_POST['server_driver'] ?? 'mysql'),
+            'host'          => trim($_POST['server_host'] ?? '127.0.0.1'),
+            'port'          => (int)($_POST['server_port'] ?? 3306),
+            'user'          => trim($_POST['server_user'] ?? 'root'),
+            'password'      => $_POST['server_password'] ?? '',
+            'auto_discover' => isset($_POST['server_autodiscover']),
+            'protected'     => isset($_POST['server_protected']),
+            'role'          => trim($_POST['server_role'] ?? 'dev'),
+        ];
+
+        // Probar conexión antes de guardar
+        try {
+            $testDriver = DriverFactory::create($serverConfig);
+            if ($testDriver->testConnection()) {
+                $config->saveServer($serverKey, $serverConfig, $configPath);
+                $message = "Servidor '{$serverConfig['label']}' guardado y conectado exitosamente.";
+                $messageType = 'success';
+                // Recargar entornos
+                $environments = $config->getEnvironments();
+            } else {
+                $message = "No se pudo conectar al servidor con las credenciales proporcionadas.";
+                $messageType = 'danger';
+            }
+        } catch (\Throwable $e) {
+            $message = "Error probando conexión: " . $e->getMessage();
             $messageType = 'danger';
+        }
+    } elseif ($action === 'delete_server') {
+        $delKey = $_POST['server_key'] ?? '';
+        if ($delKey) {
+            $config->deleteServer($delKey, $configPath);
+            $message = "Servidor eliminado.";
+            $messageType = 'info';
+            $environments = $config->getEnvironments();
         }
     }
 }
+
 
 // Endpoint API JSON liviano para chequear un entorno bajo demanda sin congelar la UI
 if (isset($_GET['api_status'])) {
@@ -245,6 +276,10 @@ $divergentList = $activeInspection['divergent'] ?? [];
                 <svg id="iconMoon" class="icon"><use href="#icon-moon"></use></svg>
                 <svg id="iconSun" class="icon" style="display:none;"><use href="#icon-sun"></use></svg>
             </button>
+            <button type="button" class="btn" onclick="openServerModal()" title="Configurar Servidores y Motores (Estilo HeidiSQL)">
+                <svg class="icon"><use href="#icon-database"></use></svg>
+                <span>Servidores</span>
+            </button>
             <form method="POST" style="display:inline;">
                 <input type="hidden" name="action" value="backup">
                 <button type="submit" class="btn" title="Generar Snapshot manual">
@@ -252,6 +287,7 @@ $divergentList = $activeInspection['divergent'] ?? [];
                     <span>Snapshot</span>
                 </button>
             </form>
+
             <button type="button" class="btn btn-primary" onclick="openSyncModal()" <?= empty($pendingList) ? 'disabled' : '' ?>>
                 <svg class="icon" style="stroke: #ffffff;"><use href="#icon-play"></use></svg>
                 <span>Sincronizar (<?= count($pendingList) ?>)</span>
@@ -503,6 +539,99 @@ $divergentList = $activeInspection['divergent'] ?? [];
         </div>
     </div>
 
+    <!-- Modal de Configuración de Servidores (Estilo HeidiSQL) -->
+    <div id="serverModal" class="modal-layer">
+        <div class="modal-window" style="max-width: 580px;">
+            <div class="modal-title-bar">
+                <span>Gestión de Servidores y Conexiones (HeidiSQL Style)</span>
+                <span onclick="closeServerModal()" style="cursor: pointer; color: var(--text-muted);">✕</span>
+            </div>
+            
+            <div style="padding: 12px 16px; background: var(--bg-subtle); border-bottom: 1px solid var(--border-color); font-size: 11px;">
+                <strong>Servidores Guardados:</strong>
+                <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+                    <?php $allServers = $config->getServers(); ?>
+                    <?php if (empty($allServers)): ?>
+                        <span style="color: var(--text-muted);">No hay servidores configurados manualmente.</span>
+                    <?php else: ?>
+                        <?php foreach ($allServers as $sKey => $sCfg): ?>
+                            <form method="POST" style="display:inline-flex; align-items:center; background:var(--bg-surface); padding:3px 8px; border:1px solid var(--border-color); border-radius:3px;">
+                                <input type="hidden" name="action" value="delete_server">
+                                <input type="hidden" name="server_key" value="<?= htmlspecialchars($sKey) ?>">
+                                <span style="font-weight:600; font-size:11px; margin-right:6px;"><?= htmlspecialchars($sCfg['label'] ?? $sKey) ?></span>
+                                <span style="font-size:10px; color:var(--text-muted); margin-right:6px;">(<?= strtoupper($sCfg['driver']) ?>:<?= $sCfg['port'] ?>)</span>
+                                <button type="submit" style="background:none; border:none; color:var(--state-danger-text); cursor:pointer; font-weight:700;" title="Eliminar servidor">✕</button>
+                            </form>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <form method="POST">
+                <div class="modal-content">
+                    <input type="hidden" name="action" value="save_server">
+                    <div style="font-weight: 600; font-size: 12px; margin-bottom: 10px;">
+                        Nueva Conexión de Servidor
+                    </div>
+                    
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px;">
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Identificador / Etiqueta:</label>
+                            <input type="text" name="server_label" placeholder="Ej: MariaDB Local" required>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Motor de Base de Datos:</label>
+                            <select name="server_driver" style="width:100%; padding:6px; border-radius:2px; border:1px solid var(--border-color); background:var(--bg-surface); color:var(--text-primary); font-size:12px; margin-top:2px;">
+                                <option value="mysql">MariaDB / MySQL</option>
+                                <option value="pgsql">PostgreSQL</option>
+                                <option value="sqlite">SQLite</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 8px;">
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Host / IP:</label>
+                            <input type="text" name="server_host" value="127.0.0.1" required>
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Puerto:</label>
+                            <input type="number" name="server_port" value="3306" required>
+                        </div>
+                    </div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Usuario:</label>
+                            <input type="text" name="server_user" value="root">
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Contraseña:</label>
+                            <input type="password" name="server_password" placeholder="Contraseña...">
+                        </div>
+                    </div>
+
+                    <div style="display: flex; flex-direction: column; gap: 6px; padding: 8px; background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 3px;">
+                        <label style="font-size: 11px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                            <input type="checkbox" name="server_autodiscover" checked>
+                            <span><strong>Auto-Discovery activo:</strong> Detectar y listar automáticamente todas las bases de datos de este host (<code>SHOW DATABASES</code>).</span>
+                        </label>
+                        <label style="font-size: 11px; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                            <input type="checkbox" name="server_protected">
+                            <span>Marcar como Entorno Protegido (requiere contraseña para sincronizar).</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="modal-bottom">
+                    <button type="button" class="btn" onclick="closeServerModal()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary">Probar y Guardar Conexión</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <script src="/assets/app.js"></script>
 </body>
 </html>
+
