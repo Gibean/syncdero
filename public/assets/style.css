@@ -9,54 +9,65 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
 :root {
-    /* Base Backgrounds (Notion Clean Paper) */
-    --bg-app: #fbfbfa;
+    /* Official SYNCDERO Brand Palette */
+    --brand-blue: #0A3D72;        /* Deep Blue principal */
+    --brand-blue-hover: #072a50;
+    --brand-blue-subtle: #e6eef6;
+    --brand-green: #2ecc71;       /* Sync Green principal */
+    --brand-green-hover: #27ae60;
+    --brand-green-subtle: #eafaf1;
+    --brand-gray: #DCDCDC;        /* Neutral Gray base */
+    --brand-gray-light: #f5f6f8;
+
+    /* Base Backgrounds (Notion Clean Paper with SYNCDERO accents) */
+    --bg-app: #f8fafc;
     --bg-surface: #ffffff;
-    --bg-subtle: #f7f7f5;
-    --bg-muted: #f0f0ee;
-    --bg-hover: #ebebea;
-    --bg-active: #e3e3e0;
+    --bg-subtle: #f1f4f8;
+    --bg-muted: #e5e9f0;
+    --bg-hover: #e2e8f0;
+    --bg-active: #cbd5e1;
     
     /* Dot Grid Canvas */
-    --canvas-dot: #dfdfdc;
-    --canvas-bg: #f8f8f6;
+    --canvas-dot: #cfd8e3;
+    --canvas-bg: #f8fafc;
 
     /* Typography & Ink */
-    --text-primary: #191919;
-    --text-secondary: #5a5a58;
-    --text-muted: #8a8a86;
-    --text-subtle: #b4b4b0;
+    --text-primary: #0A3D72;      /* Brand Deep Blue text */
+    --text-secondary: #475569;
+    --text-muted: #64748b;
+    --text-subtle: #94a3b8;
     --text-inverse: #ffffff;
 
     /* Borders (Flat, Crisp, Minimalist) */
-    --border-subtle: #ebebea;
-    --border-color: #dfdfdc;
-    --border-strong: #c7c7c3;
-    --border-contrast: #191919;
+    --border-subtle: #e2e8f0;
+    --border-color: #DCDCDC;      /* Official Brand Gray */
+    --border-strong: #94a3b8;
+    --border-contrast: #0A3D72;
 
-    /* Semantic States (Desaturated, Flat Palette) */
-    --state-sync-bg: #eaf5ed;
-    --state-sync-text: #1d733c;
-    --state-sync-border: #c3e2cb;
+    /* Semantic States (Desaturated, Brand Aligned) */
+    --state-sync-bg: var(--brand-green-subtle);
+    --state-sync-text: #1b8a48;
+    --state-sync-border: #a3e9be;
 
-    --state-warn-bg: #fdf5ea;
-    --state-warn-text: #8c5b16;
-    --state-warn-border: #f6dcbe;
+    --state-warn-bg: #fdf6e7;
+    --state-warn-text: #966114;
+    --state-warn-border: #f8ddae;
 
-    --state-danger-bg: #faeaeb;
-    --state-danger-text: #a8242e;
-    --state-danger-border: #f0c3c6;
+    --state-danger-bg: #fde8e8;
+    --state-danger-text: #c02b37;
+    --state-danger-border: #f8b4b7;
 
-    --state-info-bg: #edf3f8;
-    --state-info-text: #235d8a;
-    --state-info-border: #c5dcfa;
+    --state-info-bg: var(--brand-blue-subtle);
+    --state-info-text: var(--brand-blue);
+    --state-info-border: #b9d2ea;
 
-    /* Node Header Pastel Headers (como en la referencia AI Flow) */
-    --node-header-green: #e4f4d2;
-    --node-header-blue: #ddebf8;
-    --node-header-purple: #eedef5;
-    --node-header-coral: #f9e2df;
-    --node-header-gray: #eeeee9;
+    /* Node Header Pastel Headers */
+    --node-header-green: #dcfce7;
+    --node-header-blue: #e0f2fe;
+    --node-header-purple: #f3e8ff;
+    --node-header-coral: #fee2e2;
+    --node-header-gray: #f1f5f9;
+
 
     /* Typography & Spacing */
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -253,21 +264,36 @@ body {
 }
 
 .btn-primary {
-    background: var(--text-primary);
-    color: var(--text-inverse);
-    border-color: var(--text-primary);
+    background: var(--brand-green);
+    color: #ffffff;
+    border-color: var(--brand-green);
     font-weight: 600;
 }
 
 .btn-primary:hover {
-    background: #333333;
-    border-color: #333333;
+    background: var(--brand-green-hover);
+    border-color: var(--brand-green-hover);
 }
 
-[data-theme="dark"] .btn-primary:hover {
-    background: #cccccc;
-    border-color: #cccccc;
+.btn-brand {
+    background: var(--brand-blue);
+    color: #ffffff;
+    border-color: var(--brand-blue);
+    font-weight: 600;
 }
+
+.btn-brand:hover {
+    background: var(--brand-blue-hover);
+    border-color: var(--brand-blue-hover);
+}
+
+.brand-logo-img {
+    height: 22px;
+    width: auto;
+    display: block;
+    object-fit: contain;
+}
+
 
 .btn-icon {
     width: 28px;

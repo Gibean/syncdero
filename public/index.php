@@ -250,14 +250,13 @@ $divergentList = $activeInspection['divergent'] ?? [];
     <!-- Barra de Navegación Superior -->
     <header class="topbar">
         <div class="brand-section">
-            <a href="/" class="brand-logo">
-                <span class="brand-icon-box">
-                    <svg class="icon"><use href="#icon-layers"></use></svg>
-                </span>
-                <span>SYNCDERO</span>
+            <a href="/" class="brand-logo" title="SYNCDERO Home">
+                <img src="/assets/logo/imagotipo-modo-claro-claro.webp" alt="SYNCDERO Logo" class="brand-logo-img logo-light">
+                <img src="/assets/logo/imagotipo-modo-oscuro-oscuro.webp" alt="SYNCDERO Logo" class="brand-logo-img logo-dark" style="display: none;">
             </a>
             <span class="breadcrumb-divider">/</span>
             <div class="env-selector-pill">
+
                 <svg class="icon"><use href="#icon-database"></use></svg>
                 <span><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></span>
             </div>

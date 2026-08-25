@@ -32,16 +32,24 @@ function initThemeToggle() {
 function updateThemeIcon(theme) {
     const moon = document.getElementById('iconMoon');
     const sun = document.getElementById('iconSun');
+    const logoLight = document.querySelector('.logo-light');
+    const logoDark = document.querySelector('.logo-dark');
+
     if (moon && sun) {
         if (theme === 'dark') {
             moon.style.display = 'none';
             sun.style.display = 'inline-block';
+            if (logoLight) logoLight.style.display = 'none';
+            if (logoDark) logoDark.style.display = 'inline-block';
         } else {
             moon.style.display = 'inline-block';
             sun.style.display = 'none';
+            if (logoLight) logoLight.style.display = 'inline-block';
+            if (logoDark) logoDark.style.display = 'none';
         }
     }
 }
+
 
 // 2. Modular Draggable Nodes
 let activeDragNode = null;
