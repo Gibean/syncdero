@@ -287,12 +287,55 @@ body {
     border-color: var(--brand-blue-hover);
 }
 
-.brand-logo-img {
-    height: 22px;
+.brand-logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    text-decoration: none;
+}
+
+.brand-isotipo-img {
+    height: 24px;
     width: auto;
     display: block;
     object-fit: contain;
 }
+
+.brand-texto-img {
+    height: 15px;
+    width: auto;
+    display: block;
+    object-fit: contain;
+}
+
+/* Watermark Desktop Background (Low opacity centered + slight blur) */
+.canvas-watermark {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(580px, 60vw);
+    pointer-events: none;
+    user-select: none;
+    z-index: 1;
+    opacity: 0.045;
+    filter: blur(1.5px);
+    transition: opacity 0.3s ease;
+}
+
+[data-theme="dark"] .canvas-watermark {
+    opacity: 0.055;
+    filter: blur(1.5px) brightness(1.2);
+}
+
+.modal-watermark-logo {
+    display: block;
+    height: 38px;
+    width: auto;
+    margin: 0 auto 12px;
+    object-fit: contain;
+}
+
 
 
 .btn-icon {

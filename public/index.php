@@ -251,11 +251,17 @@ $divergentList = $activeInspection['divergent'] ?? [];
     <header class="topbar">
         <div class="brand-section">
             <a href="/" class="brand-logo" title="SYNCDERO Home">
-                <img src="/assets/logo/imagotipo-modo-claro-claro.webp" alt="SYNCDERO Logo" class="brand-logo-img logo-light">
-                <img src="/assets/logo/imagotipo-modo-oscuro-oscuro.webp" alt="SYNCDERO Logo" class="brand-logo-img logo-dark" style="display: none;">
+                <!-- Modo Claro: Isotipo Claro-Oscuro + Logo Texto Modo Claro -->
+                <img src="/assets/logo/isotipo-modo-claro-oscuro.webp" alt="SYNCDERO Isotipo" class="brand-isotipo-img logo-light">
+                <img src="/assets/logo/logo-texto-modo-claro.webp" alt="SYNCDERO" class="brand-texto-img logo-light">
+
+                <!-- Modo Oscuro: Isotipo Oscuro-Claro + Logo Texto Modo Oscuro -->
+                <img src="/assets/logo/isotipo-modo-oscuro-claro.webp" alt="SYNCDERO Isotipo" class="brand-isotipo-img logo-dark" style="display: none;">
+                <img src="/assets/logo/logo-texto-modo-oscuro.webp" alt="SYNCDERO" class="brand-texto-img logo-dark" style="display: none;">
             </a>
             <span class="breadcrumb-divider">/</span>
             <div class="env-selector-pill">
+
 
                 <svg class="icon"><use href="#icon-database"></use></svg>
                 <span><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></span>
@@ -348,9 +354,14 @@ $divergentList = $activeInspection['divergent'] ?? [];
         <!-- 2. Canvas Central: Dot Grid & Draggable Flow Cards -->
         <main class="canvas-area">
             
+            <!-- Watermark Desktop Background (Low opacity centered + slight blur) -->
+            <img src="/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO Watermark" class="canvas-watermark logo-light">
+            <img src="/assets/logo/imagotipo-modo-oscuro-claro.webp" alt="SYNCDERO Watermark" class="canvas-watermark logo-dark" style="display: none;">
+
             <div class="flow-viewport" id="flowViewport">
                 <!-- SVG Wire Connections -->
                 <svg id="flowSvgWires" class="flow-connections-svg"></svg>
+
 
                 <?php 
                     $posX = 40;
@@ -514,10 +525,15 @@ $divergentList = $activeInspection['divergent'] ?? [];
             <form method="POST">
                 <div class="modal-content">
                     <input type="hidden" name="action" value="sync">
-                    <p style="margin-bottom: 8px; font-weight: 500;">
+                    
+                    <!-- Imagotipo en Ventana de Autorización / Confirmación -->
+                    <img src="/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO" class="modal-watermark-logo logo-light">
+                    <img src="/assets/logo/imagotipo-modo-oscuro-claro.webp" alt="SYNCDERO" class="modal-watermark-logo logo-dark" style="display: none;">
+
+                    <p style="margin-bottom: 8px; font-weight: 500; text-align: center;">
                         ¿Deseas aplicar las <?= count($pendingList) ?> migraciones pendientes al entorno <strong><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></strong>?
                     </p>
-                    <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px;">
+                    <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; text-align: center;">
                         Se creará un respaldo atómico automático en <code>backups/</code> antes de ejecutar los cambios.
                     </p>
 
@@ -530,6 +546,7 @@ $divergentList = $activeInspection['divergent'] ?? [];
                         </div>
                     <?php endif; ?>
                 </div>
+
                 <div class="modal-bottom">
                     <button type="button" class="btn" onclick="closeSyncModal()">Cancelar</button>
                     <button type="submit" class="btn btn-primary">Aplicar Cambios</button>
