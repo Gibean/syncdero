@@ -154,16 +154,17 @@ body {
 
 /* Top Navigation Bar */
 .topbar {
-    height: 48px;
+    height: 54px;
     background: var(--bg-surface);
     border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0 16px;
+    padding: 0 18px;
     user-select: none;
     z-index: 50;
 }
+
 
 .brand-section {
     display: flex;
@@ -290,51 +291,58 @@ body {
 .brand-logo {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
     text-decoration: none;
 }
 
 .brand-isotipo-img {
-    height: 24px;
+    height: 32px;
     width: auto;
     display: block;
     object-fit: contain;
+    transition: transform 0.15s ease;
+}
+
+.brand-logo:hover .brand-isotipo-img {
+    transform: scale(1.04);
 }
 
 .brand-texto-img {
-    height: 15px;
+    height: 20px;
+    max-width: 140px;
     width: auto;
     display: block;
     object-fit: contain;
 }
 
-/* Watermark Desktop Background (Low opacity centered + slight blur) */
+/* Watermark Desktop Background (Con mayor claridad y presencia centrada) */
 .canvas-watermark {
     position: absolute;
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: min(580px, 60vw);
+    width: min(650px, 70vw);
     pointer-events: none;
     user-select: none;
     z-index: 1;
-    opacity: 0.045;
-    filter: blur(1.5px);
+    opacity: 0.12;
+    filter: blur(0.75px);
     transition: opacity 0.3s ease;
 }
 
 [data-theme="dark"] .canvas-watermark {
-    opacity: 0.055;
-    filter: blur(1.5px) brightness(1.2);
+    opacity: 0.14;
+    filter: blur(0.75px) brightness(1.15);
 }
 
 .modal-watermark-logo {
     display: block;
-    height: 38px;
+    height: 44px;
     width: auto;
-    margin: 0 auto 12px;
+    margin: 0 auto 14px;
     object-fit: contain;
 }
+
 
 
 
@@ -351,9 +359,10 @@ body {
     flex: 1;
     display: grid;
     grid-template-columns: 240px 1fr 300px;
-    height: calc(100vh - 48px);
+    height: calc(100vh - 54px);
     overflow: hidden;
 }
+
 
 /* Barra Lateral Izquierda (Colección de Entornos / Remotes) */
 .sidebar-left {

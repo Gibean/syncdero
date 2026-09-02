@@ -187,6 +187,7 @@ $divergentList = $activeInspection['divergent'] ?? [];
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SYNCDERO — Database Schema Version Flow</title>
+    <link rel="icon" type="image/x-icon" href="/assets/logo/isotipo-modo-claro-oscuro.webp">
     <link rel="stylesheet" href="/assets/icons.css">
     <link rel="stylesheet" href="/assets/style.css">
 </head>
