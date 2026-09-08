@@ -155,12 +155,13 @@ class StateEngine
      * 
      * @return array{success: bool, applied_count: int, errors: array, duration_ms: int}
      */
-    public function syncPending(DriverInterface $driver, array $pending, string $appliedBy = 'system'): array
+    public function syncPending(DriverInterface $driver, array $pending, string $appliedBy = 'system', ?string $notes = null): array
     {
         $startTime = microtime(true);
         $nextBatch = $driver->getNextBatchNumber();
         $appliedCount = 0;
         $errors = [];
+        $gitInfo = $this->getGitInfo();
 
         foreach ($pending as $item) {
             /** @var MigrationFile $file */
@@ -182,7 +183,10 @@ class StateEngine
                     hash: $file->hash,
                     batch: $nextBatch,
                     durationMs: $durationMs,
-                    appliedBy: $appliedBy
+                    appliedBy: $appliedBy,
+                    gitCommit: $gitInfo['commit'],
+                    gitBranch: $gitInfo['branch'],
+                    notes: $notes
                 );
 
                 $appliedCount++;
@@ -204,8 +208,36 @@ class StateEngine
             'errors' => $errors,
             'duration_ms' => $totalDurationMs,
             'batch' => $nextBatch,
+            'git_commit' => $gitInfo['commit'],
+            'git_branch' => $gitInfo['branch'],
         ];
     }
+
+    /**
+     * Revierte el último lote aplicado.
+     */
+    public function rollbackLastBatch(DriverInterface $driver): array
+    {
+        $lastBatch = $driver->getLastBatchMigrations();
+        if (empty($lastBatch)) {
+            return [
+                'success' => false,
+                'message' => 'No hay lotes previos para revertir.',
+                'reverted_batch' => 0,
+            ];
+        }
+
+        $batchNumber = (int)$lastBatch[0]['batch'];
+        $driver->rollbackLastBatch();
+
+        return [
+            'success' => true,
+            'message' => "Lote #{$batchNumber} revertido (" . count($lastBatch) . " migraciones desregistradas).",
+            'reverted_batch' => $batchNumber,
+            'migrations' => array_column($lastBatch, 'name'),
+        ];
+    }
+
 
     /**
      * Ejecuta una clase anónima o con nombre de migración de Laravel.
@@ -248,21 +280,73 @@ class StateEngine
      */
     public function getGitInfo(): array
     {
+        $default = ['branch' => 'unknown', 'commit' => 'unknown'];
         if (!is_dir($this->repoDir)) {
-            return ['branch' => 'unknown', 'commit' => 'unknown'];
+            return $default;
         }
 
         $headFile = $this->repoDir . DIRECTORY_SEPARATOR . 'HEAD';
         if (!file_exists($headFile)) {
+            return $default;
+        }
+
+        $head = trim((string) file_get_contents($headFile));
+
+        if (!str_starts_with($head, 'ref:')) {
+            // HEAD desacoplado (detached): el propio HEAD contiene el SHA.
+            return ['branch' => '(detached)', 'commit' => substr($head, 0, 7) ?: 'unknown'];
+        }
+
+        $branch = preg_replace('/^ref: refs\/heads\//', '', $head) ?? '';
+        if ($branch === '') {
             return ['branch' => 'unknown', 'commit' => 'unknown'];
         }
 
-        $head = trim(file_get_contents($headFile));
-        $branch = preg_replace('/^ref: refs\/heads\//', '', $head);
-
         $commitFile = $this->repoDir . DIRECTORY_SEPARATOR . 'refs' . DIRECTORY_SEPARATOR . 'heads' . DIRECTORY_SEPARATOR . $branch;
-        $commit = file_exists($commitFile) ? substr(trim(file_get_contents($commitFile)), 0, 7) : 'unknown';
+        $commit = 'unknown';
+
+        if (file_exists($commitFile)) {
+            $commit = substr(trim((string) file_get_contents($commitFile)), 0, 7);
+        } else {
+            // Ramas empaquetadas (packed-refs), típico tras clone/fetch/gc
+            $packedFile = $this->repoDir . DIRECTORY_SEPARATOR . 'packed-refs';
+            if (file_exists($packedFile)) {
+                $needle = ' refs/heads/' . $branch;
+                foreach (file($packedFile, FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+                    if (str_ends_with($line, $needle) && !str_starts_with($line, '#')) {
+                        $commit = substr(trim(explode(' ', $line)[0]), 0, 7);
+                        break;
+                    }
+                }
+            }
+        }
 
         return ['branch' => $branch, 'commit' => $commit];
     }
+
+    /**
+     * Obtiene el listado de ramas de Git disponibles en el repositorio.
+     * @return array<string>
+     */
+    public function getGitBranches(): array
+    {
+        if (!is_dir($this->repoDir)) {
+            return [];
+        }
+
+        $headsDir = $this->repoDir . DIRECTORY_SEPARATOR . 'refs' . DIRECTORY_SEPARATOR . 'heads';
+        if (!is_dir($headsDir)) {
+            return [];
+        }
+
+        $branches = [];
+        $files = scandir($headsDir) ?: [];
+        foreach ($files as $f) {
+            if ($f !== '.' && $f !== '..' && is_file($headsDir . DIRECTORY_SEPARATOR . $f)) {
+                $branches[] = $f;
+            }
+        }
+        return $branches;
+    }
 }
+

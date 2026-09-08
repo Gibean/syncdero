@@ -46,7 +46,7 @@ class MySqlDriver extends AbstractDriver
         try {
             $pdo = $this->getPdo();
             $stmt = $pdo->query("
-                SHOW DATABASES 
+                SHOW DATABASES
                 WHERE `Database` NOT IN ('information_schema', 'mysql', 'performance_schema', 'sys')
             ");
 
@@ -56,11 +56,10 @@ class MySqlDriver extends AbstractDriver
             }
             sort($databases);
             return $databases;
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return [];
         }
     }
-
 
     public function ensureMetadataTable(): void
     {
@@ -76,13 +75,26 @@ class MySqlDriver extends AbstractDriver
             git_branch VARCHAR(100) NULL,
             execution_time_ms INT DEFAULT 0,
             applied_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            migration_content MEDIUMTEXT NULL,
+            note VARCHAR(500) NULL,
             INDEX idx_syncdero_batch (batch)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;";
 
         $pdo->exec($sql);
 
+        // Evolución de schema para tablas creadas por versiones anteriores
+        $this->ensureMetaColumns();
+
         // Retrocompatibilidad con tabla 'migrations' de Laravel si existe
         $this->syncLaravelMigrationsIfPresent();
+    }
+
+    protected function metaColumnDefinitions(): array
+    {
+        return [
+            'migration_content MEDIUMTEXT NULL',
+            'note VARCHAR(500) NULL',
+        ];
     }
 
     protected function syncLaravelMigrationsIfPresent(): void
@@ -98,35 +110,9 @@ class MySqlDriver extends AbstractDriver
                     FROM migrations
                 ");
             }
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             // Silencioso si no hay tabla migrations
         }
-    }
-
-    public function getAppliedMigrations(): array
-    {
-        $pdo = $this->getPdo();
-        $this->ensureMetadataTable();
-
-        $stmt = $pdo->query("
-            SELECT migration_name AS name, version_hash AS hash, batch, applied_at, status, execution_time_ms
-            FROM {$this->metaTable}
-            ORDER BY batch ASC, id ASC
-        ");
-
-        $migrations = [];
-        while ($row = $stmt->fetch()) {
-            $migrations[$row['name']] = [
-                'name' => $row['name'],
-                'hash' => $row['hash'],
-                'batch' => (int)$row['batch'],
-                'applied_at' => $row['applied_at'],
-                'status' => $row['status'],
-                'execution_time_ms' => (int)$row['execution_time_ms'],
-            ];
-        }
-
-        return $migrations;
     }
 
     public function createBackup(string $targetDirectory): array
@@ -145,29 +131,28 @@ class MySqlDriver extends AbstractDriver
         $user = $this->config['user'] ?? 'root';
         $pass = $this->config['password'] ?? '';
 
-        // Intentar usar mysqldump o mariadb-dump del sistema si existe
-        $dumpCmd = "mysqldump -h {$host} -P {$port} -u {$user} " . ($pass !== '' ? "-p\"{$pass}\"" : '') . " {$dbname} > \"{$targetPath}\" 2>&1";
-        @exec($dumpCmd, $output, $code);
+        // Intentar usar mysqldump o mariadb-dump del sistema si existe (vía proc_open, sin shell)
+        $dumpCmd = $this->findBinary(['mysqldump', 'mariadb-dump']);
+        if ($dumpCmd !== null) {
+            $args = ['-h', (string) $host, '-P', (string) $port, '-u', (string) $user];
+            if ($pass !== '') {
+                $args[] = "-p{$pass}";
+            }
+            $args[] = (string) $dbname;
 
-        if ($code === 0 && file_exists($targetPath) && filesize($targetPath) > 0) {
-            return [
-                'success' => true,
-                'path' => $targetPath,
-                'message' => 'Respaldo generado con éxito vía mysqldump',
-            ];
+            $result = $this->runProcess($dumpCmd, $args, $targetPath);
+            if ($result === 0 && file_exists($targetPath) && filesize($targetPath) > 0) {
+                return [
+                    'success' => true,
+                    'path' => $targetPath,
+                    'message' => 'Respaldo generado con éxito vía mysqldump',
+                ];
+            }
         }
 
-        // Fallback ligero en PHP (exportar schema básico)
+        // Fallback ligero en PHP (exportar schema + datos)
         try {
-            $pdo = $this->getPdo();
-            $dumpContent = "-- SYNCDERO MySQL/MariaDB Snapshot: {$dbname}\n-- Generated: " . date('Y-m-d H:i:s') . "\n\n";
-            $tablesStmt = $pdo->query("SHOW FULL TABLES WHERE Table_Type = 'BASE TABLE'");
-            while ($row = $tablesStmt->fetch(\PDO::FETCH_NUM)) {
-                $table = $row[0];
-                $createStmt = $pdo->query("SHOW CREATE TABLE `{$table}`");
-                $createRow = $createStmt->fetch(\PDO::FETCH_NUM);
-                $dumpContent .= "DROP TABLE IF EXISTS `{$table}`;\n" . $createRow[1] . ";\n\n";
-            }
+            $dumpContent = $this->exportSchema(true);
             file_put_contents($targetPath, $dumpContent);
             return [
                 'success' => true,
@@ -181,5 +166,168 @@ class MySqlDriver extends AbstractDriver
                 'message' => 'Error al generar respaldo: ' . $e->getMessage(),
             ];
         }
+    }
+
+    public function restoreBackup(string $backupFile): array
+    {
+        if (!file_exists($backupFile)) {
+            return [
+                'success' => false,
+                'message' => "El archivo de respaldo no existe: {$backupFile}",
+                'rewound' => [],
+            ];
+        }
+
+        $before = $this->testConnection() ? $this->getAppliedMigrations() : [];
+
+        try {
+            $dump = (string) file_get_contents($backupFile);
+            $this->applySqlDump($dump);
+        } catch (\Throwable $e) {
+            return [
+                'success' => false,
+                'message' => 'Error restaurando el respaldo: ' . $e->getMessage(),
+                'rewound' => [],
+            ];
+        }
+
+        return [
+            'success' => true,
+            'message' => 'Base de datos restaurada desde el snapshot.',
+            'rewound' => $this->computeRewound($before),
+        ];
+    }
+
+    public function exportSchema(bool $withData = false): string
+    {
+        $pdo = $this->getPdo();
+        $dump = "-- Snapshot MySQL/MariaDB generado por SYNCDERO\n-- " . gmdate('Y-m-d H:i:s') . " UTC\n\n";
+
+        $tablesStmt = $pdo->query("SHOW FULL TABLES WHERE Table_Type = 'BASE TABLE'");
+        while ($row = $tablesStmt->fetch(\PDO::FETCH_NUM)) {
+            $table = $row[0];
+            $createStmt = $pdo->query("SHOW CREATE TABLE `{$table}`");
+            $createRow = $createStmt->fetch(\PDO::FETCH_NUM);
+            $dump .= "DROP TABLE IF EXISTS `{$table}`;\n" . $createRow[1] . ";\n\n";
+
+            if ($withData) {
+                $dump .= $this->exportTableData($table);
+            }
+        }
+
+        return $dump;
+    }
+
+    /**
+     * Genera las sentencias INSERT de una tabla (para respaldos con datos).
+     */
+    protected function exportTableData(string $table): string
+    {
+        $pdo = $this->getPdo();
+        $inserts = '';
+
+        $select = $pdo->query("SELECT * FROM `{$table}`");
+        while ($row = $select->fetch(\PDO::FETCH_ASSOC)) {
+            $columns = array_keys($row);
+            $values = array_map(
+                static fn ($v): string => ($v === null) ? 'NULL' : $pdo->quote((string) $v),
+                array_values($row)
+            );
+            $inserts .= "INSERT INTO `{$table}` (`" . implode('`, `', $columns) . "`) VALUES (" . implode(', ', $values) . ");\n";
+        }
+
+        return $inserts === '' ? '' : $inserts . "\n";
+    }
+
+    public function createDatabase(string $databaseName): void
+    {
+        $pdo = $this->getPdo();
+        $safeName = $this->sanitizeIdentifier($databaseName);
+        $pdo->exec("CREATE DATABASE `{$safeName}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci");
+    }
+
+    public function copySchemaTo(string $targetDatabase, bool $withData = false): void
+    {
+        $pdo = $this->getPdo();
+        $sourceDb = $this->config['database'] ?? '';
+        if ($sourceDb === '') {
+            throw new \RuntimeException('El entorno MySQL de origen no tiene base de datos seleccionada.');
+        }
+
+        $safeTarget = $this->sanitizeIdentifier($targetDatabase);
+        $tablesStmt = $pdo->query("SHOW FULL TABLES WHERE Table_Type = 'BASE TABLE'");
+
+        while ($row = $tablesStmt->fetch(\PDO::FETCH_NUM)) {
+            $table = $row[0];
+            // CREATE TABLE ... LIKE replica estructura e índices sin datos
+            $pdo->exec("CREATE TABLE `{$safeTarget}`.`{$table}` LIKE `{$sourceDb}`.`{$table}`");
+            if ($withData) {
+                $pdo->exec("INSERT INTO `{$safeTarget}`.`{$table}` SELECT * FROM `{$sourceDb}`.`{$table}`");
+            }
+        }
+    }
+
+    /**
+     * Sanitiza un identificador para evitar inyección SQL en nombres de BD/tabla.
+     */
+    protected function sanitizeIdentifier(string $name): string
+    {
+        $clean = preg_replace('/[^a-zA-Z0-9_]/', '_', $name);
+        return ($clean === '' || $clean === null) ? 'branch_' . time() : $clean;
+    }
+
+    /**
+     * Localiza un ejecutable en el PATH del sistema.
+     *
+     * @param array<int, string> $candidates
+     */
+    protected function findBinary(array $candidates): ?string
+    {
+        $isWindows = strtoupper(substr(PHP_OS, 0, 3)) === 'WIN';
+        $paths = explode(PATH_SEPARATOR, (string) (getenv('PATH') ?: ''));
+
+        foreach ($candidates as $candidate) {
+            foreach ($paths as $dir) {
+                if (!is_string($dir) || $dir === '') {
+                    continue;
+                }
+                $exe = rtrim($dir, '/\\') . DIRECTORY_SEPARATOR . $candidate . ($isWindows ? '.exe' : '');
+                if (file_exists($exe)) {
+                    return $exe;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Ejecuta un proceso redirigiendo su salida estándar a un archivo, sin
+     * interpolación de shell (evita inyección de comandos vía credenciales).
+     *
+     * @param array<int, string> $args
+     * @return int Código de salida del proceso.
+     */
+    protected function runProcess(string $command, array $args, string $stdoutFile): int
+    {
+        $descriptors = [
+            0 => ['pipe', 'r'],
+            1 => ['file', $stdoutFile, 'w'],
+            2 => ['pipe', 'w'],
+        ];
+
+        $process = @proc_open([$command, ...$args], $descriptors, $pipes);
+        if (!is_resource($process)) {
+            return -1;
+        }
+
+        fclose($pipes[0]);
+        $stderr = (string) stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+
+        $code = (int) proc_close($process);
+        if ($code !== 0 && $stderr !== '') {
+            error_log("[SYNCDERO] {$command} stderr: " . trim($stderr));
+        }
+        return $code;
     }
 }

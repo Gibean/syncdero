@@ -60,8 +60,16 @@ function printHelp(): void {
     echo "             Uso: php bin/syncdero sync <entorno> [--dry-run] [--no-backup]\n";
     echo "  \033[1;32mdiff\033[0m       Muestra el diff y contenido de migraciones pendientes o conflictivas.\n";
     echo "             Uso: php bin/syncdero diff <entorno>\n";
+    echo "  \033[1;32mrollback\033[0m   Revierte el último lote (batch) de migraciones en un entorno.\n";
+    echo "             Uso: php bin/syncdero rollback <entorno>\n";
     echo "  \033[1;32mbackup\033[0m     Genera un snapshot manual del entorno indicado.\n";
-    echo "             Uso: php bin/syncdero backup <entorno>\n\n";
+    echo "             Uso: php bin/syncdero backup <entorno>\n";
+    echo "  \033[1;32mdiff\033[0m       Muestra el diff y contenido de migraciones pendientes o conflictivas.\n";
+    echo "             Uso: php bin/syncdero diff <entorno>\n";
+    echo "  \033[1;32mrestore\033[0m    Restaura un snapshot de respaldo en el entorno indicado.\n";
+    echo "             Uso: php bin/syncdero restore <entorno> [--file=<archivo>]\n";
+    echo "  \033[1;32mrollback\033[0m    Deshace el último lote restaurando el snapshot previo al sync.\n";
+    echo "             Uso: php bin/syncdero rollback <entorno>\n\n";
 }
 
 // Ejecución de comandos
@@ -224,6 +232,137 @@ switch ($command) {
             exit(0);
         } else {
             fwrite(STDERR, "\033[1;31m✗ Falló la migración: " . json_encode($syncResult['errors']) . "\033[0m\n");
+            exit(1);
+        }
+
+    case 'backup':
+        $targetEnv = $args[1] ?? null;
+        if (!$targetEnv) {
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno. Ej: php bin/syncdero backup sqlite_demo\033[0m\n");
+            exit(1);
+        }
+
+        $envConfig = $config->getEnvironment($targetEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado en la configuración.\033[0m\n");
+            exit(1);
+        }
+
+        printHeader();
+        echo "Generando snapshot manual de: \033[1;33m{$targetEnv}\033[0m\n";
+
+        $driver = DriverFactory::create($envConfig);
+        if (!$driver->testConnection()) {
+            fwrite(STDERR, "\033[1;31mError: No se pudo conectar a la base de datos.\033[0m\n");
+            exit(1);
+        }
+
+        $backupRes = $driver->createBackup($config->getBackupDir());
+        if ($backupRes['success']) {
+            echo "\033[1;32m✓ Snapshot generado: {$backupRes['path']}\033[0m\n";
+            exit(0);
+        }
+        fwrite(STDERR, "\033[1;31m✗ {$backupRes['message']}\033[0m\n");
+        exit(1);
+
+    case 'rollback':
+        $targetEnv = $args[1] ?? null;
+        if (!$targetEnv) {
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno para rollback. Ej: php bin/syncdero rollback mariadb_local\033[0m\n");
+            exit(1);
+        }
+
+        $envConfig = $config->getEnvironment($targetEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado.\033[0m\n");
+            exit(1);
+        }
+
+        printHeader();
+        echo "Ejecutando Rollback en: \033[1;33m{$targetEnv}\033[0m\n";
+        $driver = DriverFactory::create($envConfig);
+        $rbResult = $stateEngine->rollbackLastBatch($driver);
+
+        if ($rbResult['success']) {
+            echo "\033[1;32m✓ Rollback exitoso:\033[0m {$rbResult['message']}\n";
+            if (!empty($rbResult['migrations'])) {
+                foreach ($rbResult['migrations'] as $m) {
+                    echo "  - Revertido: {$m}\n";
+                }
+            }
+            exit(0);
+        } else {
+            fwrite(STDERR, "\033[1;33m{$rbResult['message']}\033[0m\n");
+            exit(1);
+        }
+
+    case 'diff':
+        $targetEnv = $args[1] ?? null;
+        if (!$targetEnv) {
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno para diff. Ej: php bin/syncdero diff mariadb_local\033[0m\n");
+            exit(1);
+        }
+
+        $envConfig = $config->getEnvironment($targetEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado.\033[0m\n");
+            exit(1);
+        }
+
+        printHeader();
+        $driver = DriverFactory::create($envConfig);
+        $inspection = $stateEngine->inspectEnvironment($driver);
+
+        echo "Inspector de Cambios para \033[1;33m{$targetEnv}\033[0m:\n\n";
+
+        if (!empty($inspection['divergent'])) {
+            echo "\033[1;31m=== DIVERGENCIAS DETECTADAS (DRIFT) ===\033[0m\n";
+            foreach ($inspection['divergent'] as $name => $item) {
+                echo "Archivo: \033[1;37m{$name}\033[0m\n";
+                echo "  Hash en BD:    {$item['db']['hash']}\n";
+                echo "  Hash en disco: {$item['file']->hash}\n";
+                echo "  Estado: Archivo en disco modificado posteriormente a su aplicación.\n\n";
+            }
+        }
+
+        if (!empty($inspection['pending'])) {
+            echo "\033[1;33m=== MIGRACIONES PENDIENTES (UNSTAGED) ===\033[0m\n";
+            foreach ($inspection['pending'] as $item) {
+                $file = $item['file'];
+                echo "--------------------------------------------------------\n";
+                echo "Archivo: \033[1;32m{$file->filename}\033[0m (SHA: {$file->hash})\n";
+                echo "--------------------------------------------------------\n";
+                $preview = substr($file->getContent(), 0, 500);
+                echo $preview . (strlen($file->getContent()) > 500 ? "\n... [truncado]" : "") . "\n\n";
+            }
+        }
+
+        if (empty($inspection['divergent']) && empty($inspection['pending'])) {
+            echo "\033[1;32mNo hay diferencias. El entorno está 100% sincronizado con el disco.\033[0m\n";
+        }
+        exit(0);
+
+    case 'backup':
+        $targetEnv = $args[1] ?? null;
+        if (!$targetEnv) {
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno. Ej: php bin/syncdero backup mariadb_local\033[0m\n");
+            exit(1);
+        }
+        $envConfig = $config->getEnvironment($targetEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado.\033[0m\n");
+            exit(1);
+        }
+
+        printHeader();
+        echo "Generando snapshot para: \033[1;33m{$targetEnv}\033[0m...\n";
+        $driver = DriverFactory::create($envConfig);
+        $res = $driver->createBackup($config->getBackupDir());
+        if ($res['success']) {
+            echo "\033[1;32m✓ Snapshot creado exitosamente:\033[0m {$res['path']}\n";
+            exit(0);
+        } else {
+            fwrite(STDERR, "\033[1;31m✗ Error al generar snapshot: {$res['message']}\033[0m\n");
             exit(1);
         }
 

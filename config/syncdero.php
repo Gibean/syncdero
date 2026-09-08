@@ -35,15 +35,16 @@ return [
 
     // Ambientes fijos y específicos
     'environments' => [
-        // Entorno SQLite local siempre disponible y ligero
+        // Entorno SQLite local (para pruebas instantáneas sin instalar ningún servidor de BD)
         'sqlite_demo' => [
             'label'     => 'SQLite Demo Local',
             'driver'    => 'sqlite',
             'database'  => __DIR__ . '/../backups/demo.sqlite',
             'protected' => false,
             'role'      => 'dev',
+            'color'     => '#3b82f6', // azul
+            'icon'      => '●',
         ],
-
 
         // Ejemplo PostgreSQL (compatible con tu contenedor advdev-postgres actual)
         'pg_main' => [
@@ -68,21 +69,10 @@ return [
             'database'  => 'app_staging',
             'user'      => getenv('PG_USER') ?: 'adv_user',
             'password'  => getenv('PG_PASSWORD') ?: '',
-            'protected' => 'warn',
+            'protected' => 'warn', // aviso + confirmación, sin contraseña
             'role'      => 'staging',
             'color'     => '#f59e0b', // amarillo
             'icon'      => '⚠',
-        ],
-
-        // Ejemplo SQLite local (para pruebas instantáneas sin instalar ningún servidor de BD)
-        'sqlite_demo' => [
-            'label'     => 'SQLite Demo Local',
-            'driver'    => 'sqlite',
-            'database'  => __DIR__ . '/../backups/demo.sqlite',
-            'protected' => false,
-            'role'      => 'dev',
-            'color'     => '#3b82f6', // azul
-            'icon'      => '●',
         ],
     ],
 ];

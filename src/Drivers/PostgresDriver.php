@@ -69,6 +69,7 @@ class PostgresDriver extends AbstractDriver
             applied_by VARCHAR(100) DEFAULT 'system',
             git_commit VARCHAR(40) NULL,
             git_branch VARCHAR(100) NULL,
+            notes TEXT NULL,
             execution_time_ms INT DEFAULT 0,
             applied_at TIMESTAMP WITHOUT TIME ZONE DEFAULT (NOW() AT TIME ZONE 'utc')
         );";
@@ -105,7 +106,7 @@ class PostgresDriver extends AbstractDriver
         $this->ensureMetadataTable();
 
         $stmt = $pdo->query("
-            SELECT migration_name AS name, version_hash AS hash, batch, applied_at, status, execution_time_ms
+            SELECT migration_name AS name, version_hash AS hash, batch, applied_at, status, execution_time_ms, git_commit, git_branch, notes
             FROM {$this->metaTable}
             ORDER BY batch ASC, id ASC
         ");
@@ -119,6 +120,9 @@ class PostgresDriver extends AbstractDriver
                 'applied_at' => $row['applied_at'],
                 'status' => $row['status'],
                 'execution_time_ms' => (int)$row['execution_time_ms'],
+                'git_commit' => $row['git_commit'] ?? null,
+                'git_branch' => $row['git_branch'] ?? null,
+                'notes' => $row['notes'] ?? null,
             ];
         }
 

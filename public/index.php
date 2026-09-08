@@ -47,6 +47,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
 
     if ($action === 'sync') {
         $password = $_POST['password'] ?? '';
+        $notes = trim($_POST['notes'] ?? '') ?: null;
         $requiresPass = ($selectedEnv['protected'] === true);
 
         if ($requiresPass && $password !== $config->getApplyPassword()) {
@@ -62,10 +63,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
                 $messageType = 'info';
             } else {
                 $driver->createBackup($config->getBackupDir());
-                $syncRes = $stateEngine->syncPending($driver, $inspection['pending'], 'web_client');
+                $syncRes = $stateEngine->syncPending($driver, $inspection['pending'], 'web_client', $notes);
 
                 if ($syncRes['success']) {
-                    $message = "Sincronización completada: {$syncRes['applied_count']} migración(es) aplicada(s) en {$syncRes['duration_ms']}ms (Batch #{$syncRes['batch']}).";
+                    $noteMsg = $notes ? " [Nota: {$notes}]" : "";
+                    $message = "Sincronización completada: {$syncRes['applied_count']} migración(es) aplicada(s) en {$syncRes['duration_ms']}ms (Batch #{$syncRes['batch']}){$noteMsg}.";
                     $messageType = 'success';
                 } else {
                     $message = "Error en la ejecución: " . json_encode($syncRes['errors']);
@@ -73,36 +75,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
                 }
             }
         }
+    } elseif ($action === 'rollback') {
+        $password = $_POST['password'] ?? '';
+        $requiresPass = ($selectedEnv['protected'] === true);
+
+        if ($requiresPass && $password !== $config->getApplyPassword()) {
+            $message = 'Contraseña no válida para revertir cambios en entorno protegido.';
+            $messageType = 'danger';
+        } else {
+            try {
+                $rbResult = $stateEngine->rollbackLastBatch($driver);
+                if ($rbResult['success']) {
+                    $message = "Rollback ejecutado exitosamente: " . $rbResult['message'];
+                    $messageType = 'success';
+                } else {
+                    $message = $rbResult['message'];
+                    $messageType = 'danger';
+                }
+            } catch (\Throwable $e) {
+                $message = "Error en el Rollback: " . $e->getMessage();
+                $messageType = 'danger';
+            }
+        }
     } elseif ($action === 'save_server') {
         $serverKey = preg_replace('/[^a-zA-Z0-9_-]/', '_', strtolower(trim($_POST['server_key'] ?? 'server_' . time())));
+        $serverDriver = trim($_POST['server_driver'] ?? 'mysql');
+
         $serverConfig = [
             'label'         => trim($_POST['server_label'] ?? $serverKey),
-            'driver'        => trim($_POST['server_driver'] ?? 'mysql'),
+            'driver'        => $serverDriver,
             'host'          => trim($_POST['server_host'] ?? '127.0.0.1'),
             'port'          => (int)($_POST['server_port'] ?? 3306),
             'user'          => trim($_POST['server_user'] ?? 'root'),
             'password'      => $_POST['server_password'] ?? '',
             'auto_discover' => isset($_POST['server_autodiscover']),
             'protected'     => isset($_POST['server_protected']),
-            'role'          => trim($_POST['server_role'] ?? 'dev'),
+            'role'          => in_array($_POST['server_role'] ?? 'dev', ['dev', 'staging', 'prod'], true) ? $_POST['server_role'] : 'dev',
         ];
 
-        // Probar conexión antes de guardar
-        try {
-            $testDriver = DriverFactory::create($serverConfig);
-            if ($testDriver->testConnection()) {
-                $config->saveServer($serverKey, $serverConfig, $configPath);
-                $message = "Servidor '{$serverConfig['label']}' guardado y conectado exitosamente.";
-                $messageType = 'success';
-                // Recargar entornos
-                $environments = $config->getEnvironments();
-            } else {
-                $message = "No se pudo conectar al servidor con las credenciales proporcionadas.";
+        // SQLite usa una ruta de archivo como "base de datos"; el resto, nombre de BD
+        if ($serverDriver === 'sqlite') {
+            $serverConfig['database'] = trim($_POST['server_database'] ?? '');
+        } else {
+            $serverConfig['database'] = trim($_POST['server_database'] ?? '');
+            // Sin base de datos definida, el auto-discovery es obligatorio para poder listar entornos
+            if ($serverConfig['database'] === '' && !$serverConfig['auto_discover']) {
+                $message = 'Indica una base de datos o activa el Auto-Discovery para este servidor.';
+                $messageType = 'danger';
+                $serverConfig = null;
+            }
+        }
+
+        if ($serverConfig !== null) {
+            // Probar conexión antes de guardar
+            try {
+                $testDriver = DriverFactory::create($serverConfig);
+                if ($testDriver->testConnection()) {
+                    $config->saveServer($serverKey, $serverConfig, $configPath);
+                    $message = "Servidor '{$serverConfig['label']}' guardado y conectado exitosamente.";
+                    $messageType = 'success';
+                    // Recargar entornos
+                    $environments = $config->getEnvironments();
+                } else {
+                    $message = "No se pudo conectar al servidor con las credenciales proporcionadas.";
+                    $messageType = 'danger';
+                }
+            } catch (\Throwable $e) {
+                $message = "Error probando conexión: " . $e->getMessage();
                 $messageType = 'danger';
             }
-        } catch (\Throwable $e) {
-            $message = "Error probando conexión: " . $e->getMessage();
-            $messageType = 'danger';
         }
     } elseif ($action === 'delete_server') {
         $delKey = $_POST['server_key'] ?? '';
@@ -111,6 +152,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
             $message = "Servidor eliminado.";
             $messageType = 'info';
             $environments = $config->getEnvironments();
+        }
+    } elseif ($action === 'backup') {
+        try {
+            if (!$driver->testConnection()) {
+                $message = 'No se pudo conectar a la base de datos para generar el snapshot.';
+                $messageType = 'danger';
+            } else {
+                $backupRes = $driver->createBackup($config->getBackupDir());
+                if ($backupRes['success']) {
+                    $message = "Snapshot generado correctamente: " . basename($backupRes['path']);
+                    $messageType = 'success';
+                } else {
+                    $message = 'No se pudo generar el snapshot: ' . $backupRes['message'];
+                    $messageType = 'danger';
+                }
+            }
+        } catch (\Throwable $e) {
+            $message = 'Error generando snapshot: ' . $e->getMessage();
+            $messageType = 'danger';
         }
     }
 }
@@ -144,6 +204,76 @@ if (isset($_GET['api_status'])) {
     exit;
 }
 
+// Endpoint API JSON para previsualizar código de migración y diff
+if (isset($_GET['api_preview'])) {
+    header('Content-Type: application/json');
+    $filename = basename($_GET['api_preview']);
+    $filePath = $config->getMigrationsDir() . DIRECTORY_SEPARATOR . $filename;
+
+    if (!file_exists($filePath)) {
+        echo json_encode(['success' => false, 'error' => 'Archivo no encontrado']);
+        exit;
+    }
+
+    $content = file_get_contents($filePath);
+    $diskHash = hash('sha256', $content);
+
+    // Si hay un entorno seleccionado y driver conectado, ver hash en BD
+    $dbHash = null;
+    $appliedAt = null;
+    $batch = null;
+    $gitCommit = null;
+    $gitBranch = null;
+    $notes = null;
+
+    if ($selectedEnv) {
+        try {
+            $d = DriverFactory::create($selectedEnv);
+            if ($d->testConnection()) {
+                $applied = $d->getAppliedMigrations();
+                if (isset($applied[$filename])) {
+                    $dbHash = $applied[$filename]['hash'];
+                    $appliedAt = $applied[$filename]['applied_at'];
+                    $batch = $applied[$filename]['batch'];
+                    $gitCommit = $applied[$filename]['git_commit'] ?? null;
+                    $gitBranch = $applied[$filename]['git_branch'] ?? null;
+                    $notes = $applied[$filename]['notes'] ?? null;
+                }
+            }
+        } catch (\Throwable $e) {
+            // Silencioso
+        }
+    }
+
+    echo json_encode([
+        'success' => true,
+        'filename' => $filename,
+        'type' => pathinfo($filename, PATHINFO_EXTENSION),
+        'disk_hash' => $diskHash,
+        'db_hash' => $dbHash,
+        'has_drift' => ($dbHash !== null && $dbHash !== $diskHash),
+        'batch' => $batch,
+        'applied_at' => $appliedAt,
+        'git_commit' => $gitCommit,
+        'git_branch' => $gitBranch,
+        'notes' => $notes,
+        'content' => $content,
+    ]);
+    exit;
+}
+
+// Endpoint API para servir el Manual Técnico
+if (isset($_GET['api_manual'])) {
+    header('Content-Type: text/plain; charset=utf-8');
+    $manualPath = __DIR__ . '/../docs/manual-tecnico.md';
+    if (file_exists($manualPath)) {
+        echo file_get_contents($manualPath);
+    } else {
+        echo "# Manual de Uso Técnico\n\nNo se encontró el archivo de manual en `docs/manual-tecnico.md`.";
+    }
+    exit;
+}
+
 // Resumen ligero de entornos para la barra lateral (Lazy / Sin bloquear la página)
 $sidebarSummary = [];
 foreach ($environments as $key => $envConfig) {
@@ -161,6 +291,7 @@ foreach ($environments as $key => $envConfig) {
 $activeInspection = null;
 $batches = [];
 $activeDriver = null;
+$connectionError = null;
 
 if ($selectedEnv) {
     try {
@@ -172,14 +303,21 @@ if ($selectedEnv) {
                 $batches[$batchNum][] = $item;
             }
             ksort($batches);
+        } else {
+            $connectionError = 'No se pudo conectar a la base de datos del entorno activo. Verifica credenciales y disponibilidad del servidor.';
         }
     } catch (\Throwable $e) {
-        // Manejado en la interfaz
+        $connectionError = 'Error de conexión: ' . $e->getMessage();
     }
 }
 
 $pendingList = $activeInspection['pending'] ?? [];
 $divergentList = $activeInspection['divergent'] ?? [];
+$gitBranches = $stateEngine->getGitBranches();
+if (empty($gitBranches) && !empty($gitInfo['branch'])) {
+    $gitBranches = [$gitInfo['branch']];
+}
+$lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $activeDriver->getLastBatchMigrations() : [];
 ?>
 <!DOCTYPE html>
 <html lang="es" data-theme="light">
@@ -246,6 +384,15 @@ $divergentList = $activeInspection['divergent'] ?? [];
         <symbol id="icon-check" viewBox="0 0 24 24">
             <polyline points="20 6 9 17 4 12"></polyline>
         </symbol>
+        <symbol id="icon-help" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"></circle>
+            <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+        </symbol>
+        <symbol id="icon-undo" viewBox="0 0 24 24">
+            <polyline points="1 4 1 10 7 10"></polyline>
+            <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+        </symbol>
     </svg>
 
     <!-- Barra de Navegación Superior -->
@@ -278,6 +425,9 @@ $divergentList = $activeInspection['divergent'] ?? [];
         </div>
 
         <div class="topbar-actions">
+            <button type="button" class="btn btn-icon" onclick="openHelpModal()" title="Manual de Uso Técnico">
+                <svg class="icon"><use href="#icon-help"></use></svg>
+            </button>
             <button id="themeToggleBtn" class="btn btn-icon" title="Alternar Modo Oscuro / Claro">
                 <svg id="iconMoon" class="icon"><use href="#icon-moon"></use></svg>
                 <svg id="iconSun" class="icon" style="display:none;"><use href="#icon-sun"></use></svg>
@@ -293,8 +443,12 @@ $divergentList = $activeInspection['divergent'] ?? [];
                     <span>Snapshot</span>
                 </button>
             </form>
+            <button type="button" class="btn" onclick="openRollbackModal()" title="Revertir el último lote de migraciones aplicado" <?= empty($lastBatchMigrations) ? 'disabled' : '' ?>>
+                <svg class="icon"><use href="#icon-undo"></use></svg>
+                <span>Rollback</span>
+            </button>
 
-            <button type="button" class="btn btn-primary" onclick="openSyncModal()" <?= empty($pendingList) ? 'disabled' : '' ?>>
+            <button type="button" class="btn btn-primary" onclick="openSyncModal()" <?= (empty($pendingList) || !empty($divergentList)) ? 'disabled' : '' ?>>
                 <svg class="icon" style="stroke: #ffffff;"><use href="#icon-play"></use></svg>
                 <span>Sincronizar (<?= count($pendingList) ?>)</span>
             </button>
@@ -362,6 +516,20 @@ $divergentList = $activeInspection['divergent'] ?? [];
             <div class="flow-viewport" id="flowViewport">
                 <!-- SVG Wire Connections -->
                 <svg id="flowSvgWires" class="flow-connections-svg"></svg>
+
+                <?php if ($connectionError): ?>
+                    <div style="position: absolute; top: 40px; left: 40px; max-width: 420px; background: var(--state-danger-bg); color: var(--state-danger-text); border: 1px solid var(--state-danger-border); border-radius: 4px; padding: 14px 16px; font-size: 12px; display: flex; gap: 10px; align-items: flex-start;">
+                        <svg class="icon"><use href="#icon-alert"></use></svg>
+                        <div>
+                            <strong>No se puede inspeccionar el entorno</strong><br>
+                            <?= htmlspecialchars($connectionError) ?>
+                        </div>
+                    </div>
+                <?php elseif ($activeInspection === null && $selectedEnv === null): ?>
+                    <div style="position: absolute; top: 40px; left: 40px; color: var(--text-subtle); font-size: 13px;">
+                        No hay entornos configurados. Abre <strong>Servidores</strong> para añadir una conexión.
+                    </div>
+                <?php endif; ?>
 
 
                 <?php 
@@ -467,7 +635,7 @@ $divergentList = $activeInspection['divergent'] ?? [];
                         <span>Divergencias Detectadas (<?= count($divergentList) ?>)</span>
                     </div>
                     <?php foreach ($divergentList as $name => $item): ?>
-                        <div class="file-row drift">
+                        <div class="file-row drift" onclick="openDiffModal('<?= htmlspecialchars($name, ENT_QUOTES) ?>')" title="Ver divergencia y diff" style="cursor: pointer;">
                             <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?= htmlspecialchars($name) ?></span>
                             <span style="font-weight: 700;">DRIFT</span>
                         </div>
@@ -486,7 +654,7 @@ $divergentList = $activeInspection['divergent'] ?? [];
                     </div>
                 <?php else: ?>
                     <?php foreach ($pendingList as $item): ?>
-                        <div class="file-row">
+                        <div class="file-row" onclick="openDiffModal('<?= htmlspecialchars($item['file']->basename, ENT_QUOTES) ?>')" title="Ver código SQL y hash" style="cursor: pointer;">
                             <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?= htmlspecialchars($item['file']->basename) ?></span>
                             <span style="color: var(--text-muted);"><?= strtoupper($item['file']->type) ?></span>
                         </div>
@@ -538,12 +706,35 @@ $divergentList = $activeInspection['divergent'] ?? [];
                         Se creará un respaldo atómico automático en <code>backups/</code> antes de ejecutar los cambios.
                     </p>
 
+                    <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; margin-bottom: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 11px;">
+                            <span style="color: var(--text-secondary); display: flex; align-items: center; gap: 4px;">
+                                <svg class="icon" style="width:12px; height:12px;"><use href="#icon-git-branch"></use></svg>
+                                <strong>Rama Git vinculada:</strong>
+                            </span>
+                            <span style="font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); background: var(--bg-surface); padding: 2px 6px; border: 1px solid var(--border-color); border-radius: 3px;">
+                                <?= htmlspecialchars($gitInfo['branch']) ?> (<?= htmlspecialchars($gitInfo['commit']) ?>)
+                            </span>
+                        </div>
+
+                        <div>
+                            <label style="display: block; font-size: 11px; font-weight: 500; color: var(--text-secondary); margin-bottom: 4px;">
+                                Nota descriptiva del lote (opcional):
+                            </label>
+                            <input type="text" name="notes" placeholder="Ej: Fix tabla clientes, sprint 4..." style="width: 100%;">
+                        </div>
+                    </div>
+
                     <?php if (($selectedEnv['protected'] ?? false) === true): ?>
                         <div style="margin-top: 12px;">
                             <label style="display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; color: var(--state-danger-text);">
                                 Entorno protegido. Ingresa la contraseña de autorización:
                             </label>
                             <input type="password" name="password" placeholder="Contraseña..." required autofocus>
+                        </div>
+                    <?php elseif (($selectedEnv['protected'] ?? false) === 'warn'): ?>
+                        <div style="margin-top: 12px; padding: 8px 10px; background: var(--state-warn-bg, rgba(245,158,11,.12)); border: 1px solid var(--state-warn-border, rgba(245,158,11,.35)); border-radius: 3px; font-size: 11px; color: var(--state-warn-text, #b45309);">
+                            <strong>Entorno de pre-producción:</strong> verifica con tu equipo que estos cambios estén aprobados antes de aplicarlos.
                         </div>
                     <?php endif; ?>
                 </div>
@@ -617,6 +808,21 @@ $divergentList = $activeInspection['divergent'] ?? [];
                         </div>
                     </div>
 
+                    <div style="display: grid; grid-template-columns: 2fr 1fr; gap: 10px; margin-bottom: 8px;">
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Base de datos (vacío + Auto-Discovery = todas):</label>
+                            <input type="text" name="server_database" placeholder="Ej: app_db">
+                        </div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Rol del entorno:</label>
+                            <select name="server_role" style="width:100%; padding:6px; border-radius:2px; border:1px solid var(--border-color); background:var(--bg-surface); color:var(--text-primary); font-size:12px; margin-top:2px;">
+                                <option value="dev">Dev</option>
+                                <option value="staging">Staging</option>
+                                <option value="prod">Prod</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px;">
                         <div>
                             <label style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">Usuario:</label>
@@ -645,6 +851,96 @@ $divergentList = $activeInspection['divergent'] ?? [];
                     <button type="submit" class="btn btn-primary">Probar y Guardar Conexión</button>
                 </div>
             </form>
+        </div>
+    </div>
+
+    <!-- Modal de Visor de Diff y Previsualización de Código -->
+    <div id="diffModal" class="modal-layer">
+        <div class="modal-window" style="max-width: 720px; width: 95%;">
+            <div class="modal-title-bar">
+                <span id="diffModalTitle">Inspección de Migración</span>
+                <span onclick="closeDiffModal()" style="cursor: pointer; color: var(--text-muted);">✕</span>
+            </div>
+            <div class="modal-content" style="max-height: 75vh; overflow-y: auto;">
+                <div id="diffMetadataBox" style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; margin-bottom: 12px; font-size: 11px;">
+                    <!-- Renderizado dinámico en app.js -->
+                </div>
+                <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">
+                    Contenido del Script:
+                </div>
+                <pre id="diffCodeContent" style="background: var(--bg-code, #1e1e1e); color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre-wrap; margin: 0; max-height: 400px;"></pre>
+            </div>
+            <div class="modal-bottom">
+                <button type="button" class="btn" onclick="closeDiffModal()">Cerrar</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Reversión / Rollback -->
+    <div id="rollbackModal" class="modal-layer">
+        <div class="modal-window">
+            <div class="modal-title-bar">
+                <span>Confirmar Reversión (Rollback)</span>
+                <span onclick="closeRollbackModal()" style="cursor: pointer; color: var(--text-muted);">✕</span>
+            </div>
+            <form method="POST">
+                <div class="modal-content">
+                    <input type="hidden" name="action" value="rollback">
+                    
+                    <img src="/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO" class="modal-watermark-logo logo-light">
+                    <img src="/assets/logo/imagotipo-modo-oscuro-claro.webp" alt="SYNCDERO" class="modal-watermark-logo logo-dark" style="display: none;">
+
+                    <p style="margin-bottom: 8px; font-weight: 500; text-align: center;">
+                        ¿Deseas revertir el último lote de migraciones aplicado en <strong><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></strong>?
+                    </p>
+                    <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; text-align: center;">
+                        Esta acción desregistrará el lote más reciente en la base de datos seleccionada.
+                    </p>
+
+                    <?php if (!empty($lastBatchMigrations)): ?>
+                        <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 4px; padding: 8px 12px; margin-bottom: 12px; font-size: 11px;">
+                            <strong>Migraciones en el último lote (Batch #<?= htmlspecialchars((string)($lastBatchMigrations[0]['batch'] ?? '')) ?>):</strong>
+                            <ul style="margin: 6px 0 0 16px; color: var(--text-secondary);">
+                                <?php foreach ($lastBatchMigrations as $lbm): ?>
+                                    <li><?= htmlspecialchars($lbm['name']) ?></li>
+                                <?php endforeach; ?>
+                            </ul>
+                        </div>
+                    <?php endif; ?>
+
+                    <?php if (($selectedEnv['protected'] ?? false) === true): ?>
+                        <div style="margin-top: 12px;">
+                            <label style="display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; color: var(--state-danger-text);">
+                                Entorno protegido. Ingresa la contraseña de autorización:
+                            </label>
+                            <input type="password" name="password" placeholder="Contraseña..." required autofocus>
+                        </div>
+                    <?php endif; ?>
+                </div>
+
+                <div class="modal-bottom">
+                    <button type="button" class="btn" onclick="closeRollbackModal()">Cancelar</button>
+                    <button type="submit" class="btn btn-primary" style="background: var(--state-danger-text); border-color: var(--state-danger-text);">Revertir Lote</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Manual de Uso Técnico -->
+    <div id="helpModal" class="modal-layer">
+        <div class="modal-window" style="max-width: 760px; width: 95%;">
+            <div class="modal-title-bar">
+                <span>Manual de Uso Técnico — SYNCDERO</span>
+                <span onclick="closeHelpModal()" style="cursor: pointer; color: var(--text-muted);">✕</span>
+            </div>
+            <div class="modal-content" style="max-height: 75vh; overflow-y: auto;">
+                <div id="helpModalContent" style="font-size: 12px; line-height: 1.6; color: var(--text-primary);">
+                    Cargando manual técnico...
+                </div>
+            </div>
+            <div class="modal-bottom">
+                <button type="button" class="btn" onclick="closeHelpModal()">Entendido</button>
+            </div>
         </div>
     </div>
 

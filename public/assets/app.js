@@ -168,6 +168,173 @@ function closeServerModal() {
     if (modal) modal.classList.remove('open');
 }
 
+function openRollbackModal() {
+    const modal = document.getElementById('rollbackModal');
+    if (modal) modal.classList.add('open');
+}
+
+function closeRollbackModal() {
+    const modal = document.getElementById('rollbackModal');
+    if (modal) modal.classList.remove('open');
+}
+
+function openHelpModal() {
+    const modal = document.getElementById('helpModal');
+    if (!modal) return;
+    modal.classList.add('open');
+    const container = document.getElementById('helpModalContent');
+    if (container && (!container.dataset.loaded || container.dataset.loaded === 'false')) {
+        container.innerHTML = '<div style="color:var(--text-muted); padding:10px;">Cargando manual técnico...</div>';
+        fetch('/?api_manual=1')
+            .then(res => res.text())
+            .then(markdown => {
+                container.dataset.loaded = 'true';
+                // Renderizado sencillo y limpio de Markdown a HTML sin librerías externas
+                container.innerHTML = renderSimpleMarkdown(markdown);
+            })
+            .catch(() => {
+                container.innerHTML = '<div style="color:var(--state-danger-text); padding:10px;">Error al cargar el manual técnico.</div>';
+            });
+    }
+}
+
+function closeHelpModal() {
+    const modal = document.getElementById('helpModal');
+    if (modal) modal.classList.remove('open');
+}
+
+function openDiffModal(filename) {
+    const modal = document.getElementById('diffModal');
+    const title = document.getElementById('diffModalTitle');
+    const metaBox = document.getElementById('diffMetadataBox');
+    const code = document.getElementById('diffCodeContent');
+    if (!modal) return;
+
+    if (title) title.textContent = `Inspección: ${filename}`;
+    if (metaBox) metaBox.innerHTML = '<div style="color:var(--text-muted);">Consultando estado y hashes...</div>';
+    if (code) code.textContent = 'Cargando script...';
+
+    modal.classList.add('open');
+
+    // Obtener parámetro de entorno activo actual de la URL
+    const urlParams = new URLSearchParams(window.location.search);
+    const envParam = urlParams.get('env') ? `&env=${encodeURIComponent(urlParams.get('env'))}` : '';
+
+    fetch(`/?api_preview=${encodeURIComponent(filename)}${envParam}`)
+        .then(res => res.json())
+        .then(data => {
+            if (!data.success) {
+                if (metaBox) metaBox.innerHTML = `<span style="color:var(--state-danger-text);">${data.error || 'Error'}</span>`;
+                if (code) code.textContent = '';
+                return;
+            }
+
+            let statusBadge = '<span class="status-badge badge-warn">PENDIENTE (UNSTAGED)</span>';
+            if (data.has_drift) {
+                statusBadge = '<span class="status-badge badge-danger">DRIFT (DIVERGENCIA DE HASH)</span>';
+            } else if (data.batch !== null) {
+                statusBadge = `<span class="status-badge badge-sync">APLICADO (BATCH #${data.batch})</span>`;
+            }
+
+            let metaHtml = `
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <strong>${escapeHtml(data.filename)}</strong>
+                    ${statusBadge}
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; color:var(--text-secondary); font-family:var(--font-mono); font-size:10px;">
+                    <div>SHA en disco: <span style="color:var(--text-primary);">${data.disk_hash ? data.disk_hash.substring(0, 16) + '...' : 'N/A'}</span></div>
+                    <div>SHA en BD: <span style="color:${data.has_drift ? 'var(--state-danger-text)' : 'var(--text-primary)'};">${data.db_hash ? data.db_hash.substring(0, 16) + '...' : 'No aplicada'}</span></div>
+                </div>
+            `;
+
+            if (data.applied_at || data.git_commit || data.notes) {
+                metaHtml += `
+                    <div style="margin-top:6px; padding-top:6px; border-top:1px dashed var(--border-color); font-size:10px; color:var(--text-muted); display:flex; gap:12px; flex-wrap:wrap;">
+                        ${data.applied_at ? `<span>Aplicado: ${escapeHtml(data.applied_at)}</span>` : ''}
+                        ${data.git_commit ? `<span>Commit: <code>${escapeHtml(data.git_commit)}</code></span>` : ''}
+                        ${data.git_branch ? `<span>Rama: <code>${escapeHtml(data.git_branch)}</code></span>` : ''}
+                        ${data.notes ? `<span>Nota: <em style="color:var(--text-primary);">${escapeHtml(data.notes)}</em></span>` : ''}
+                    </div>
+                `;
+            }
+
+            if (data.has_drift) {
+                metaHtml += `
+                    <div style="margin-top:8px; padding:6px 8px; background:var(--state-danger-bg); color:var(--state-danger-text); border:1px solid var(--state-danger-border); border-radius:3px; font-size:11px;">
+                        <strong>ALERTA DE DIVERGENCIA:</strong> El contenido de este archivo en disco fue modificado después de haberse aplicado a la base de datos.
+                    </div>
+                `;
+            }
+
+            if (metaBox) metaBox.innerHTML = metaHtml;
+            if (code) code.textContent = data.content || '';
+        })
+        .catch(err => {
+            if (metaBox) metaBox.innerHTML = '<span style="color:var(--state-danger-text);">Error al consultar archivo.</span>';
+            if (code) code.textContent = '';
+        });
+}
+
+function closeDiffModal() {
+    const modal = document.getElementById('diffModal');
+    if (modal) modal.classList.remove('open');
+}
+
+function escapeHtml(text) {
+    if (!text) return '';
+    return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderSimpleMarkdown(md) {
+    if (!md) return '';
+    const lines = md.split('\n');
+    let html = '';
+    let inPre = false;
+    let preContent = '';
+
+    for (let line of lines) {
+        if (line.startsWith('```')) {
+            if (inPre) {
+                html += `<pre style="background:var(--bg-code, #18181b); color:#e4e4e7; padding:10px; border-radius:4px; font-family:var(--font-mono); font-size:11px; overflow-x:auto; margin:8px 0;">${escapeHtml(preContent)}</pre>`;
+                preContent = '';
+                inPre = false;
+            } else {
+                inPre = true;
+                preContent = '';
+            }
+            continue;
+        }
+
+        if (inPre) {
+            preContent += (preContent ? '\n' : '') + line;
+            continue;
+        }
+
+        if (line.startsWith('# ')) {
+            html += `<h2 style="font-size:16px; margin:14px 0 8px 0; border-bottom:1px solid var(--border-color); padding-bottom:4px; font-weight:700;">${escapeHtml(line.slice(2))}</h2>`;
+        } else if (line.startsWith('## ')) {
+            html += `<h3 style="font-size:14px; margin:12px 0 6px 0; font-weight:600; color:var(--brand-primary);">${escapeHtml(line.slice(3))}</h3>`;
+        } else if (line.startsWith('### ')) {
+            html += `<h4 style="font-size:13px; margin:10px 0 4px 0; font-weight:600;">${escapeHtml(line.slice(4))}</h4>`;
+        } else if (line.startsWith('- ') || line.startsWith('* ')) {
+            html += `<li style="margin-left:20px; margin-bottom:4px;">${parseInlineMd(line.slice(2))}</li>`;
+        } else if (line.trim() === '---') {
+            html += `<hr style="border:none; border-top:1px solid var(--border-color); margin:12px 0;">`;
+        } else if (line.trim().length > 0) {
+            html += `<p style="margin-bottom:8px;">${parseInlineMd(line)}</p>`;
+        }
+    }
+    return html;
+}
+
+function parseInlineMd(text) {
+    let t = escapeHtml(text);
+    t = t.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/\*(.*?)\*/g, '<em>$1</em>');
+    t = t.replace(/`([^`]+)`/g, '<code style="background:var(--bg-subtle); padding:2px 4px; border-radius:3px; font-size:11px; border:1px solid var(--border-color);">$1</code>');
+    return t;
+}
+
 
 // 4. Lazy Asynchronous Background Status Checker (HeidiSQL style, zero UI freeze)
 function initLazyStatusChecker() {

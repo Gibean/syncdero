@@ -1,116 +1,170 @@
-# SYNCDERO - Git-Like Database Version Control & Migration Monitor
+<p align="center">
+  <img src="public/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO Logo" width="380">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![PHP Version](https://img.shields.io/badge/PHP-8.2%2B-777BB4.svg)](https://php.net)
-[![Docker Support](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://docker.com)
+# SYNCDERO
 
-**SYNCDERO** es un motor y panel de control de versiones para bases de datos diseñado con la filosofía y flujo de trabajo de **Git**. Permite monitorear, auditar y sincronizar esquemas de bases de datos entre múltiples entornos y contenedores (Producción, Staging, Espejos de Desarrollo).
+Sistema de control de versiones, auditoria criptografica y monitoreo de esquemas de bases de datos para MariaDB/MySQL, PostgreSQL y SQLite.
 
-Soporta nativamente **MariaDB / MySQL**, **PostgreSQL** y **SQLite**, funcionando tanto en **Docker** como de forma **Standalone** en Windows, Linux y macOS.
-
----
-
-## 🌟 Características Principales
-
-- **Inmutabilidad por Hashes (SHA-256):** Cada migración se sella con su hash criptográfico. Si alguien altera un archivo ya aplicado en producción o desarrollo, SYNCDERO alerta de inmediato sobre una divergencia (**CONFLICT / DRIFT**).
-- **Entornos como Branches/Remotes:** Monitorea y sincroniza bases de datos principales y espejos de desarrollo como si fueran ramas remotas de Git.
-- **Soporte Dual de Migraciones:**
-  - Archivos `.sql` planos estándar (universales y agnósticos).
-  - Migraciones `.php` de Laravel (compatibilidad retroactiva).
-- **Doble Interfaz:**
-  - **CLI First:** Comandos de terminal `bin/syncdero status`, `sync`, `diff` optimizados para pipelines CI/CD (OneDev, GitHub Actions, GitLab CI).
-  - **Web Dashboard:** Interfaz visual con temática oscura, árbol de batches/commits e inspección de diferencias.
-- **Respaldos Atómicos Automáticos:** Realiza un snapshot previo antes de aplicar cualquier lote de migración.
+[![Licencia](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![PHP](https://img.shields.io/badge/PHP-8.2%2B-777BB4.svg)](https://php.net)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED.svg)](https://docker.com)
 
 ---
 
-## 🚀 Inicio Rápido con Docker
+## 1. Descripcion General
 
-La forma más rápida de usar SYNCDERO en cualquier sistema:
+SYNCDERO traslada la semantica y el flujo de trabajo de Git al ciclo de vida de las bases de datos relacionales. Permite auditar y sincronizar esquemas entre entornos heterogeneos (desarrollo local, servidores baremetal, contenedores Docker y preproduccion), garantizando inmutabilidad mediante sellado criptografico SHA-256 por archivo.
 
-```bash
-# 1. Clonar el repositorio
-git clone https://github.com/tu-usuario/syncdero.git
-cd syncdero
-
-# 2. Levantar el servicio
-docker compose up -d --build
-
-# 3. Acceder al Dashboard Web
-# Abre http://localhost:8088 en tu navegador
-```
+El sistema detecta cuando un script ya aplicado ha sido modificado en disco (alerta de Drift), permite agrupar ejecuciones en lotes secuenciales (Batches) y revertir de forma atomica el ultimo lote aplicado (Rollback). Cada ejecucion queda vinculada al commit y a la rama de Git del proyecto anfitrion.
 
 ---
 
-## 💻 Uso Standalone (En Windows, Linux o Mac sin Docker)
+## 2. Requisitos y Dependencias
 
-Para usar SYNCDERO directamente en tu máquina local contra tu **MariaDB / MySQL**, **PostgreSQL** o **SQLite** local:
+### Entorno Standalone (Windows, Linux, macOS)
+- PHP 8.2 o PHP 8.3 en CLI y Web.
+- Extensiones PHP obligatorias (segun el motor utilizado):
+  - `pdo`
+  - `pdo_mysql` (para MariaDB y MySQL)
+  - `pdo_pgsql` (para PostgreSQL)
+  - `pdo_sqlite` (para SQLite)
+  - `openssl` (para calculo de hashes criptograficos)
+- Servidor web interno (`php -S`) o servidores de desarrollo como Laragon, XAMPP, Nginx o Apache.
 
-### Requisitos:
-- PHP 8.2 o superior con las extensiones `pdo_mysql`, `pdo_pgsql` o `pdo_sqlite` habilitadas en tu `php.ini`.
+### Entorno Docker
+- Docker Engine 20.10+
+- Docker Compose v2+
 
-### Pasos:
-1. Copia el archivo de configuración base:
+---
+
+## 3. Instalacion y Puesta en Marcha
+
+### Opcion A: Despliegue con Docker Compose
+
+1. Clonar el repositorio:
    ```bash
-   cp config/syncdero.php config/my_config.php
+   git clone https://github.com/Gibean/syncdero.git
+   cd syncdero
    ```
-2. Edita tus credenciales de base de datos en `config/syncdero.php` o exporta variables de entorno:
-   ```powershell
-   # En Windows PowerShell:
-   $env:MARIADB_HOST="127.0.0.1"
-   $env:MARIADB_DATABASE="mi_base_de_datos"
-   $env:MARIADB_USER="root"
-   $env:MARIADB_PASSWORD=""
-   ```
-3. Ejecuta los comandos CLI:
+
+2. Iniciar el servicio en segundo plano:
    ```bash
-   # Ver estado de sincronización de todos los entornos:
-   php bin/syncdero status
-
-   # Simular aplicación de migraciones sin tocar la BD (Dry-Run):
-   php bin/syncdero sync mariadb_local --dry-run
-
-   # Aplicar migraciones con backup automático:
-   php bin/syncdero sync mariadb_local
+   docker compose up -d --build
    ```
-4. Para iniciar el Dashboard Web local:
+
+3. Acceder al panel de control:
+   Navegar a `http://localhost:8088` en el explorador web.
+
+### Opcion B: Instalacion Standalone (Laragon / Windows / Linux)
+
+1. Verificar que las extensiones PDO requeridas esten activas en `php.ini`:
+   ```bash
+   php -m | grep -E "pdo|pdo_mysql|pdo_pgsql|pdo_sqlite"
+   ```
+
+2. Instalar dependencias mediante Composer (o utilizar el autoloader fallback en `src/autoload.php`):
+   ```bash
+   composer install --no-dev --optimize-autoloader
+   ```
+
+3. Iniciar el servidor local para la interfaz web:
    ```bash
    php -S 0.0.0.0:8088 -t public
    ```
 
 ---
 
-## 🔄 Integración CI/CD en OneDev y Pipelines
+## 4. Configuracion de Servidores y Entornos
 
-SYNCDERO previene que se mezclen cambios con inconsistencias en ramas principales. Puedes agregarlo como un paso en tu pipeline de **OneDev**:
+La configuracion principal reside en `config/syncdero.php`. Puede personalizarse mediante variables de entorno o agregarse graficamente desde el modal **Servidores** en el panel web.
 
-```yaml
-- name: Verify Database Sync with SYNCDERO
-  image: syncdero:latest
-  commands:
-    # Bloquea el pipeline (exit 1) si hay divergencias o alteraciones en los hashes
-    - php /app/bin/syncdero status --fail-on-divergence --format=json
+Ejemplo de configuracion:
+
+```php
+return [
+    'migrations_dir' => __DIR__ . '/../migrations',
+    'backup_dir'     => __DIR__ . '/../backups',
+    'repo_dir'       => __DIR__ . '/../.git',
+    'apply_password' => getenv('SYNCDERO_APPLY_PASSWORD') ?: 'secret',
+
+    'servers' => [
+        'mariadb_host' => [
+            'label'         => 'Servidor MariaDB Principal',
+            'driver'        => 'mysql',
+            'host'          => '127.0.0.1',
+            'port'          => 3306,
+            'user'          => 'root',
+            'password'      => '',
+            'auto_discover' => true,
+            'protected'     => false,
+            'role'          => 'dev',
+        ],
+        'postgres_host' => [
+            'label'         => 'Servidor PostgreSQL Local',
+            'driver'        => 'pgsql',
+            'host'          => '127.0.0.1',
+            'port'          => 5432,
+            'user'          => 'postgres',
+            'password'      => 'postgres',
+            'database'      => 'app_db',
+            'protected'     => true,
+            'role'          => 'staging',
+        ],
+    ],
+];
 ```
 
 ---
 
-## 📁 Estructura del Proyecto
+## 5. Referencia de la Interfaz de Linea de Comandos (CLI)
 
-```text
-syncdero/
-├── bin/
-│   └── syncdero           # Ejecutable CLI principal
-├── config/
-│   └── syncdero.php       # Configuración multimotor y ambientes
-├── src/
-│   ├── Core/              # StateEngine, Hashes SHA-256, Config
-│   └── Drivers/           # PostgresDriver, MySqlDriver, SqliteDriver
-├── public/                # Web Dashboard y UI
-├── Dockerfile             # Imagen Alpine multi-driver (PHP 8.3)
-└── composer.json          # Autoloading PSR-4 (Syncdero\)
-```
+El ejecutable `bin/syncdero` provee control directo para administradores de sistemas y automatizacion en pipelines CI/CD:
+
+| Comando | Descripcion |
+| :--- | :--- |
+| `php bin/syncdero status` | Muestra una tabla comparativa con el estado de sincronizacion de cada entorno. |
+| `php bin/syncdero status --fail-on-divergence` | Finaliza con codigo de salida `1` si existe alguna alteracion en los hashes aplicados. |
+| `php bin/syncdero status --format=json` | Exporta el estado estructurado en JSON para integracion con scripts y runners. |
+| `php bin/syncdero sync <entorno> --dry-run` | Simula la ejecucion sin escribir en la base de datos ni generar backups. |
+| `php bin/syncdero sync <entorno>` | Aplica las migraciones pendientes generando un snapshot previo en `backups/`. |
+| `php bin/syncdero diff <entorno>` | Inspecciona discrepancias de hash (Drift) y muestra el contenido de scripts pendientes. |
+| `php bin/syncdero rollback <entorno>` | Revierte el ultimo lote (batch) registrado en el entorno indicado. |
+| `php bin/syncdero backup <entorno>` | Genera un volcado SQL manual del esquema en la carpeta `backups/`. |
 
 ---
 
-## 📄 Licencia
-Este proyecto es de código abierto bajo la licencia MIT.
+## 6. Funcionalidades de la Interfaz Web
+
+- **Lienzo de Nodos de Versionamiento:** Visualizacion cronologica de cada batch aplicado con cables curvos de flujo e indicacion del tiempo de ejecucion en milisegundos.
+- **Boton de Ayuda Tecnica:** Acceso inmediato al manual tecnico integrado desde el icono `?` ubicado en la cabecera superior.
+- **Alternador de Tema Claro y Oscuro:** Adaptacion de paleta cromatica corporativa (#0A3D72 Deep Blue, #2ECC71 Sync Green) con variantes vectoriales de imagotipo.
+- **Visor de Diff e Inspeccion:** Al hacer clic en cualquier archivo de la lista de pendientes o divergencias, se despliega el codigo SQL, los hashes SHA-256 calculados y la advertencia de Drift.
+- **Reversion por Lotes (Rollback):** Permite deshacer el lote de migraciones mas reciente directamente desde la barra superior, solicitando confirmacion o contrasena en entornos protegidos.
+- **Enlace de Metadatos con Git:** Cada lote guarda de forma inmutable el identificador de commit (`git_commit`), la rama activa (`git_branch`) y notas de desarrollo ingresadas al momento de sincronizar.
+
+---
+
+## 7. Diagnostico y Resolucion de Errores Comunes
+
+### Error: Extension PDO no encontrada (`could not find driver`)
+- **Causa:** La extension PHP correspondiente al motor no esta habilitada en `php.ini`.
+- **Resolucion:** Abrir el archivo `php.ini` activo y descomentar las lineas `extension=pdo_mysql`, `extension=pdo_pgsql` o `extension=pdo_sqlite`. Reiniciar el servidor web o terminal.
+
+### Error: Divergencia detectada (`CONFLICT / DRIFT`)
+- **Causa:** Un archivo `.sql` o `.php` en la carpeta `migrations/` fue editado despues de haber sido ejecutado en la base de datos.
+- **Resolucion:** Inspeccionar el archivo con `php bin/syncdero diff <entorno>` o desde el panel web. Si el cambio fue un error, restaurar el contenido original mediante `git checkout migrations/nombre_archivo.sql`. Si el cambio es una nueva alteracion requerida, revertir el lote previo o crear un nuevo archivo de migracion incremental.
+
+### Error: Tiempo de espera agotado (`Connection timed out`)
+- **Causa:** El host configurado no esta encendido o un firewall bloquea el puerto (ej. 3306, 5432).
+- **Resolucion:** La interfaz web utiliza verificacion asincrona desacoplada para evitar bloqueos del navegador. Verificar que el contenedor o servicio este en ejecucion y que la direccion IP sea accesible desde la maquina local.
+
+### Error: Permisos de escritura en carpetas locales (`backups/`, `config/`)
+- **Causa:** El proceso de PHP no posee privilegios para crear snapshots en disco.
+- **Resolucion:** Asignar permisos de lectura y escritura en los directorios `backups/` y `config/` (`chmod -R 775 backups config` en Linux/macOS).
+
+---
+
+## 8. Licencia
+
+Proyecto distribuido bajo la licencia MIT. Consulte el archivo `LICENSE` para mas detalles.
