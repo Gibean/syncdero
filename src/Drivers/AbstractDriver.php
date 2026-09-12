@@ -213,6 +213,31 @@ abstract class AbstractDriver implements DriverInterface
     }
 
     /**
+     * Calcula qué migraciones quedaron rebobinadas tras un restore comparando
+     * los registros de la tabla de metadatos antes y después de la operación.
+     *
+     * @param array<string, array> $before Registros antes del restore.
+     * @return array<int, string> Nombres de migraciones rebobinadas.
+     */
+    protected function computeRewound(array $before): array
+    {
+        $rewound = [];
+        try {
+            $after = $this->getAppliedMigrations();
+        } catch (\Throwable) {
+            return array_keys($before);
+        }
+
+        foreach ($before as $name => $record) {
+            if (!isset($after[$name]) || $after[$name]['hash'] !== $record['hash'] || (int)$after[$name]['batch'] !== (int)$record['batch']) {
+                $rewound[] = (string)$name;
+            }
+        }
+
+        return $rewound;
+    }
+
+    /**
      * Sanitiza un identificador para evitar inyección SQL en nombres de BD/tabla.
      */
     protected function sanitizeIdentifier(string $name): string
@@ -250,9 +275,10 @@ abstract class AbstractDriver implements DriverInterface
      * interpolación de shell (evita inyección de comandos vía credenciales).
      *
      * @param array<int, string> $args
+     * @param array<string, string> $extraEnv Variables de entorno adicionales del proceso.
      * @return int Código de salida del proceso.
      */
-    protected function runProcess(string $command, array $args, string $stdoutFile): int
+    protected function runProcess(string $command, array $args, string $stdoutFile, array $extraEnv = []): int
     {
         $descriptors = [
             0 => ['pipe', 'r'],
@@ -260,7 +286,9 @@ abstract class AbstractDriver implements DriverInterface
             2 => ['pipe', 'w'],
         ];
 
-        $process = @proc_open([$command, ...$args], $descriptors, $pipes);
+        $env = $extraEnv === [] ? null : array_merge(getenv() ?: [], $extraEnv);
+
+        $process = @proc_open([$command, ...$args], $descriptors, $pipes, null, $env);
         if (!is_resource($process)) {
             return -1;
         }

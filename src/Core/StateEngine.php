@@ -184,9 +184,10 @@ class StateEngine
                     batch: $nextBatch,
                     durationMs: $durationMs,
                     appliedBy: $appliedBy,
+                    content: $file->getContent(),
                     gitCommit: $gitInfo['commit'],
                     gitBranch: $gitInfo['branch'],
-                    notes: $notes
+                    note: $notes
                 );
 
                 $appliedCount++;
@@ -214,28 +215,87 @@ class StateEngine
     }
 
     /**
-     * Revierte el último lote aplicado.
+     * Revierte el entorno restaurando el snapshot de respaldo más reciente.
+     * El rollback en SYNCDERO es una restauración atómica del último backup
+     * disponible del entorno, lo que rebobina tanto el esquema como la tabla
+     * de metadatos al estado del snapshot.
      */
-    public function rollbackLastBatch(DriverInterface $driver): array
+    public function rollbackToLatestBackup(DriverInterface $driver, string $backupDir, string $database): array
     {
-        $lastBatch = $driver->getLastBatchMigrations();
-        if (empty($lastBatch)) {
+        $latest = $this->findLatestBackup($backupDir, $database);
+        if ($latest === null) {
             return [
                 'success' => false,
-                'message' => 'No hay lotes previos para revertir.',
-                'reverted_batch' => 0,
+                'message' => 'No hay snapshots de respaldo para este entorno. Genere un backup primero.',
+                'restored_from' => null,
+                'safety_path' => null,
+                'rewound' => [],
             ];
         }
 
-        $batchNumber = (int)$lastBatch[0]['batch'];
-        $driver->rollbackLastBatch();
+        $safety = $driver->createBackup($backupDir);
+        $result = $driver->restoreBackup($latest);
 
         return [
-            'success' => true,
-            'message' => "Lote #{$batchNumber} revertido (" . count($lastBatch) . " migraciones desregistradas).",
-            'reverted_batch' => $batchNumber,
-            'migrations' => array_column($lastBatch, 'name'),
+            'success' => $result['success'],
+            'message' => $result['message'],
+            'restored_from' => $latest,
+            'safety_path' => $safety['success'] ? $safety['path'] : null,
+            'rewound' => $result['rewound'],
         ];
+    }
+
+    /**
+     * Retorna la ruta del snapshot más reciente del entorno (o null si no hay).
+     */
+    public function findLatestBackup(string $backupDir, string $database): ?string
+    {
+        $backups = $this->findBackups($backupDir, $database, 1);
+        return $backups[0]['path'] ?? null;
+    }
+
+    /**
+     * Lista los snapshots de respaldo de una base de datos, del más reciente
+     * al más antiguo. Coincide con el patrón de nombres de createBackup():
+     * backup_{db}_{timestamp}.sql y backup_sqlite_{archivo}_{timestamp}.sqlite.
+     *
+     * @return array<int, array{name: string, path: string, size: int, modified: int}>
+     */
+    public function findBackups(string $backupDir, string $database, int $limit = 0): array
+    {
+        if (!is_dir($backupDir)) {
+            return [];
+        }
+
+        $base = basename($database);
+        if ($base === '' || $base === '.') {
+            return [];
+        }
+
+        $pattern = '/^backup_(sqlite_)?' . preg_quote($base, '/') . '_/';
+        $matches = [];
+
+        foreach (scandir($backupDir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $backupDir . DIRECTORY_SEPARATOR . $entry;
+            if (!is_file($path) || !preg_match($pattern, $entry)) {
+                continue;
+            }
+
+            $matches[] = [
+                'name' => $entry,
+                'path' => $path,
+                'size' => (int) filesize($path),
+                'modified' => (int) filemtime($path),
+            ];
+        }
+
+        usort($matches, static fn(array $a, array $b): int => $b['modified'] <=> $a['modified']);
+
+        return $limit > 0 ? array_slice($matches, 0, $limit) : $matches;
     }
 
 

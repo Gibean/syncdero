@@ -84,9 +84,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
             $messageType = 'danger';
         } else {
             try {
-                $rbResult = $stateEngine->rollbackLastBatch($driver);
+                $rbResult = $stateEngine->rollbackToLatestBackup($driver, $config->getBackupDir(), (string) ($selectedEnv['database'] ?? ''));
                 if ($rbResult['success']) {
-                    $message = "Rollback ejecutado exitosamente: " . $rbResult['message'];
+                    $rewoundInfo = count($rbResult['rewound']) > 0
+                        ? ' Migraciones rebobinadas: ' . count($rbResult['rewound']) . '.'
+                        : ' El estado de versionado ya coincidía con el snapshot.';
+                    $safetyInfo = $rbResult['safety_path']
+                        ? ' Respaldo de seguridad previo: ' . basename($rbResult['safety_path']) . '.'
+                        : '';
+                    $message = "Rollback ejecutado (snapshot restaurado: " . basename((string) $rbResult['restored_from']) . "): " . $rbResult['message'] . "{$rewoundInfo}{$safetyInfo}";
                     $messageType = 'success';
                 } else {
                     $message = $rbResult['message'];
@@ -94,6 +100,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
                 }
             } catch (\Throwable $e) {
                 $message = "Error en el Rollback: " . $e->getMessage();
+                $messageType = 'danger';
+            }
+        }
+    } elseif ($action === 'restore') {
+        $password = $_POST['password'] ?? '';
+        $requiresPass = ($selectedEnv['protected'] === true);
+
+        if ($requiresPass && $password !== $config->getApplyPassword()) {
+            $message = 'Contraseña no válida para restaurar en entorno protegido.';
+            $messageType = 'danger';
+        } else {
+            try {
+                // Resolución segura del snapshot: solo nombre de archivo dentro de backups/
+                $backupName = basename(trim($_POST['backup_file'] ?? ''));
+                $backupPath = ($backupName !== '') ? $config->getBackupDir() . DIRECTORY_SEPARATOR . $backupName : null;
+
+                if ($backupPath === null || !file_exists($backupPath)) {
+                    $message = 'No se encontró el snapshot de respaldo indicado.';
+                    $messageType = 'danger';
+                } else {
+                    // Respaldo de seguridad antes de sobrescribir el estado actual
+                    $safety = $driver->createBackup($config->getBackupDir());
+                    $res = $driver->restoreBackup($backupPath);
+
+                    if ($res['success']) {
+                        $rewoundInfo = count($res['rewound']) > 0
+                            ? ' Migraciones rebobinadas: ' . count($res['rewound']) . '.'
+                            : ' El estado de versionado ya coincidía con el snapshot.';
+                        $safetyInfo = $safety['success']
+                            ? ' Respaldo de seguridad previo: ' . basename($safety['path']) . '.'
+                            : '';
+                        $message = "Snapshot restaurado ({$backupName}): " . $res['message'] . "{$rewoundInfo}{$safetyInfo}";
+                        $messageType = 'success';
+                    } else {
+                        $message = "No se pudo restaurar el snapshot: " . $res['message'];
+                        $messageType = 'danger';
+                    }
+                }
+            } catch (\Throwable $e) {
+                $message = 'Error al restaurar: ' . $e->getMessage();
                 $messageType = 'danger';
             }
         }
@@ -225,6 +271,7 @@ if (isset($_GET['api_preview'])) {
     $gitCommit = null;
     $gitBranch = null;
     $notes = null;
+    $dbContent = null;
 
     if ($selectedEnv) {
         try {
@@ -237,7 +284,8 @@ if (isset($_GET['api_preview'])) {
                     $batch = $applied[$filename]['batch'];
                     $gitCommit = $applied[$filename]['git_commit'] ?? null;
                     $gitBranch = $applied[$filename]['git_branch'] ?? null;
-                    $notes = $applied[$filename]['notes'] ?? null;
+                    $notes = $applied[$filename]['note'] ?? null;
+                    $dbContent = $applied[$filename]['content'] ?? null;
                 }
             }
         } catch (\Throwable $e) {
@@ -258,6 +306,7 @@ if (isset($_GET['api_preview'])) {
         'git_branch' => $gitBranch,
         'notes' => $notes,
         'content' => $content,
+        'db_content' => $dbContent,
     ]);
     exit;
 }

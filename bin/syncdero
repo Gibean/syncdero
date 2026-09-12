@@ -60,15 +60,11 @@ function printHelp(): void {
     echo "             Uso: php bin/syncdero sync <entorno> [--dry-run] [--no-backup]\n";
     echo "  \033[1;32mdiff\033[0m       Muestra el diff y contenido de migraciones pendientes o conflictivas.\n";
     echo "             Uso: php bin/syncdero diff <entorno>\n";
-    echo "  \033[1;32mrollback\033[0m   Revierte el último lote (batch) de migraciones en un entorno.\n";
-    echo "             Uso: php bin/syncdero rollback <entorno>\n";
     echo "  \033[1;32mbackup\033[0m     Genera un snapshot manual del entorno indicado.\n";
     echo "             Uso: php bin/syncdero backup <entorno>\n";
-    echo "  \033[1;32mdiff\033[0m       Muestra el diff y contenido de migraciones pendientes o conflictivas.\n";
-    echo "             Uso: php bin/syncdero diff <entorno>\n";
     echo "  \033[1;32mrestore\033[0m    Restaura un snapshot de respaldo en el entorno indicado.\n";
     echo "             Uso: php bin/syncdero restore <entorno> [--file=<archivo>]\n";
-    echo "  \033[1;32mrollback\033[0m    Deshace el último lote restaurando el snapshot previo al sync.\n";
+    echo "  \033[1;32mrollback\033[0m   Deshace los cambios recientes restaurando el snapshot más reciente.\n";
     echo "             Uso: php bin/syncdero rollback <entorno>\n\n";
 }
 
@@ -265,10 +261,83 @@ switch ($command) {
         fwrite(STDERR, "\033[1;31m✗ {$backupRes['message']}\033[0m\n");
         exit(1);
 
+    case 'restore':
+        $targetEnv = $args[1] ?? null;
+        if (!$targetEnv) {
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno. Ej: php bin/syncdero restore sqlite_demo\033[0m\n");
+            exit(1);
+        }
+
+        $envConfig = $config->getEnvironment($targetEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado.\033[0m\n");
+            exit(1);
+        }
+
+        $fileArg = null;
+        foreach ($args as $a) {
+            if (str_starts_with((string) $a, '--file=')) {
+                $fileArg = substr((string) $a, 7);
+            }
+        }
+
+        printHeader();
+        echo "Restauración de snapshot en: \033[1;33m{$targetEnv}\033[0m\n";
+
+        $driver = DriverFactory::create($envConfig);
+        if (!$driver->testConnection()) {
+            fwrite(STDERR, "\033[1;31mError: No se pudo conectar a la base de datos.\033[0m\n");
+            exit(1);
+        }
+
+        // Resolver el archivo a restaurar: explícito o el más reciente del entorno
+        if ($fileArg !== null && $fileArg !== '') {
+            $backupFile = is_file($fileArg)
+                ? realpath($fileArg)
+                : $config->getBackupDir() . DIRECTORY_SEPARATOR . basename($fileArg);
+        } else {
+            $backupFile = $stateEngine->findLatestBackup($config->getBackupDir(), (string) ($envConfig['database'] ?? ''));
+            if ($backupFile === null) {
+                fwrite(STDERR, "\033[1;31mNo hay snapshots disponibles para '{$targetEnv}'. Ejecute 'php bin/syncdero backup {$targetEnv}' primero.\033[0m\n");
+                exit(1);
+            }
+        }
+
+        if (!is_string($backupFile) || !file_exists((string) $backupFile)) {
+            fwrite(STDERR, "\033[1;31mError: El archivo de respaldo indicado no existe.\033[0m\n");
+            exit(1);
+        }
+
+        echo "Snapshot objetivo: \033[0;37m" . basename((string) $backupFile) . "\033[0m\n";
+
+        echo "Creando respaldo de seguridad previo...";
+        $safety = $driver->createBackup($config->getBackupDir());
+        echo $safety['success']
+            ? " \033[1;32mOK\033[0m ({$safety['path']})\n"
+            : " \033[1;33mAVISO: {$safety['message']}\033[0m\n";
+
+        echo "Restaurando...\n";
+        $res = $driver->restoreBackup((string) $backupFile);
+
+        if ($res['success']) {
+            echo "\033[1;32m✓ Restauración exitosa:\033[0m {$res['message']}\n";
+            if (!empty($res['rewound'])) {
+                echo "Migraciones rebobinadas al estado del snapshot:\n";
+                foreach ($res['rewound'] as $m) {
+                    echo "  - {$m}\n";
+                }
+            } else {
+                echo "El estado de versionado coincide con el snapshot (nada rebobinado).\n";
+            }
+            exit(0);
+        }
+        fwrite(STDERR, "\033[1;31m✗ {$res['message']}\033[0m\n");
+        exit(1);
+
     case 'rollback':
         $targetEnv = $args[1] ?? null;
         if (!$targetEnv) {
-            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno para rollback. Ej: php bin/syncdero rollback mariadb_local\033[0m\n");
+            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno para rollback. Ej: php bin/syncdero rollback sqlite_demo\033[0m\n");
             exit(1);
         }
 
@@ -279,22 +348,32 @@ switch ($command) {
         }
 
         printHeader();
-        echo "Ejecutando Rollback en: \033[1;33m{$targetEnv}\033[0m\n";
+        echo "Ejecutando Rollback (restauración del snapshot más reciente) en: \033[1;33m{$targetEnv}\033[0m\n";
+
         $driver = DriverFactory::create($envConfig);
-        $rbResult = $stateEngine->rollbackLastBatch($driver);
+        if (!$driver->testConnection()) {
+            fwrite(STDERR, "\033[1;31mError: No se pudo conectar a la base de datos.\033[0m\n");
+            exit(1);
+        }
+
+        $rbResult = $stateEngine->rollbackToLatestBackup($driver, $config->getBackupDir(), (string) ($envConfig['database'] ?? ''));
 
         if ($rbResult['success']) {
+            echo "Snapshot restaurado: \033[0;37m" . basename((string) $rbResult['restored_from']) . "\033[0m\n";
+            if (!empty($rbResult['safety_path'])) {
+                echo "Respaldo de seguridad previo: \033[0;37m" . basename($rbResult['safety_path']) . "\033[0m\n";
+            }
             echo "\033[1;32m✓ Rollback exitoso:\033[0m {$rbResult['message']}\n";
-            if (!empty($rbResult['migrations'])) {
-                foreach ($rbResult['migrations'] as $m) {
-                    echo "  - Revertido: {$m}\n";
+            if (!empty($rbResult['rewound'])) {
+                echo "Migraciones rebobinadas:\n";
+                foreach ($rbResult['rewound'] as $m) {
+                    echo "  - {$m}\n";
                 }
             }
             exit(0);
-        } else {
-            fwrite(STDERR, "\033[1;33m{$rbResult['message']}\033[0m\n");
-            exit(1);
         }
+        fwrite(STDERR, "\033[1;31m✗ {$rbResult['message']}\033[0m\n");
+        exit(1);
 
     case 'diff':
         $targetEnv = $args[1] ?? null;
@@ -341,30 +420,6 @@ switch ($command) {
             echo "\033[1;32mNo hay diferencias. El entorno está 100% sincronizado con el disco.\033[0m\n";
         }
         exit(0);
-
-    case 'backup':
-        $targetEnv = $args[1] ?? null;
-        if (!$targetEnv) {
-            fwrite(STDERR, "\033[1;31mError: Debe especificar el entorno. Ej: php bin/syncdero backup mariadb_local\033[0m\n");
-            exit(1);
-        }
-        $envConfig = $config->getEnvironment($targetEnv);
-        if (!$envConfig) {
-            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado.\033[0m\n");
-            exit(1);
-        }
-
-        printHeader();
-        echo "Generando snapshot para: \033[1;33m{$targetEnv}\033[0m...\n";
-        $driver = DriverFactory::create($envConfig);
-        $res = $driver->createBackup($config->getBackupDir());
-        if ($res['success']) {
-            echo "\033[1;32m✓ Snapshot creado exitosamente:\033[0m {$res['path']}\n";
-            exit(0);
-        } else {
-            fwrite(STDERR, "\033[1;31m✗ Error al generar snapshot: {$res['message']}\033[0m\n");
-            exit(1);
-        }
 
     default:
         fwrite(STDERR, "Comando desconocido: '{$command}'. Ejecute 'php bin/syncdero --help' para ayuda.\n");

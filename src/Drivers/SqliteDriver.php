@@ -136,7 +136,7 @@ class SqliteDriver extends AbstractDriver
         ];
     }
 
-    public function exportSchema(): string
+    public function exportSchema(bool $withData = false): string
     {
         $pdo = $this->getPdo();
         $dump = "-- Snapshot de esquema SQLite generado por SYNCDERO\n-- " . gmdate('Y-m-d H:i:s') . " UTC\n\n";
@@ -148,8 +148,27 @@ class SqliteDriver extends AbstractDriver
             ORDER BY type DESC, name ASC
         ");
 
+        $tables = [];
         while ($row = $stmt->fetch(\PDO::FETCH_ASSOC)) {
             $dump .= $row['sql'] . ";\n\n";
+            if ($row['type'] === 'table') {
+                $tables[] = $row['name'];
+            }
+        }
+
+        if ($withData && !empty($tables)) {
+            foreach ($tables as $table) {
+                $select = $pdo->query("SELECT * FROM \"{$table}\"");
+                while ($row = $select->fetch(\PDO::FETCH_ASSOC)) {
+                    $cols = array_keys($row);
+                    $vals = array_map(
+                        static fn ($v): string => ($v === null) ? 'NULL' : $pdo->quote((string) $v),
+                        array_values($row)
+                    );
+                    $dump .= "INSERT INTO \"{$table}\" (\"" . implode('", "', $cols) . "\") VALUES (" . implode(', ', $vals) . ");\n";
+                }
+                $dump .= "\n";
+            }
         }
 
         return $dump;
