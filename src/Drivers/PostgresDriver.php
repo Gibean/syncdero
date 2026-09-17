@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Syncdero\Drivers;
 
+use Syncdero\Core\SqlSplitter;
+
 class PostgresDriver extends AbstractDriver
 {
     public function getName(): string

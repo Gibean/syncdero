@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Syncdero\Drivers;
 
+use Syncdero\Core\SqlSplitter;
+
 class SqliteDriver extends AbstractDriver
 {
     public function getName(): string
@@ -165,7 +167,9 @@ class SqliteDriver extends AbstractDriver
                         static fn ($v): string => ($v === null) ? 'NULL' : $pdo->quote((string) $v),
                         array_values($row)
                     );
-                    $dump .= "INSERT INTO \"{$table}\" (\"" . implode('", "', $cols) . "\") VALUES (" . implode(', ', $vals) . ");\n";
+                    $dump .= "INSERT INTO \"{$table}\" (\""
+                        . implode('", "', $cols) . "\") VALUES ("
+                        . implode(', ', $vals) . ");\n";
                 }
                 $dump .= "\n";
             }
@@ -179,7 +183,9 @@ class SqliteDriver extends AbstractDriver
         // En SQLite una "base de datos" es un archivo: la ruta destino define la rama.
         $dir = dirname($this->config['database'] ?? '');
         if ($dir === '' || $dir === '.') {
-            throw new \RuntimeException('La base de datos SQLite activa no tiene una ruta de archivo válida para crear ramas.');
+            throw new \RuntimeException(
+                'La base de datos SQLite activa no tiene una ruta de archivo válida para crear ramas.'
+            );
         }
         $targetPath = $dir . DIRECTORY_SEPARATOR . $databaseName . '.sqlite';
 
