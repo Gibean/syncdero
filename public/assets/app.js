@@ -207,12 +207,12 @@ function openDiffModal(filename) {
     const modal = document.getElementById('diffModal');
     const title = document.getElementById('diffModalTitle');
     const metaBox = document.getElementById('diffMetadataBox');
-    const code = document.getElementById('diffCodeContent');
+    const codeArea = document.getElementById('diffCodeArea');
     if (!modal) return;
 
     if (title) title.textContent = `Inspección: ${filename}`;
     if (metaBox) metaBox.innerHTML = '<div style="color:var(--text-muted);">Consultando estado y hashes...</div>';
-    if (code) code.textContent = 'Cargando script...';
+    if (codeArea) codeArea.innerHTML = '<div style="color:var(--text-muted); font-size:12px;">Cargando script...</div>';
 
     modal.classList.add('open');
 
@@ -225,7 +225,7 @@ function openDiffModal(filename) {
         .then(data => {
             if (!data.success) {
                 if (metaBox) metaBox.innerHTML = `<span style="color:var(--state-danger-text);">${data.error || 'Error'}</span>`;
-                if (code) code.textContent = '';
+                if (codeArea) codeArea.innerHTML = '';
                 return;
             }
 
@@ -267,11 +267,34 @@ function openDiffModal(filename) {
             }
 
             if (metaBox) metaBox.innerHTML = metaHtml;
-            if (code) code.textContent = data.content || '';
+
+            // Visor de contenido: single (disco) o comparación lado a lado (BD vs disco)
+            const codeArea = document.getElementById('diffCodeArea');
+            if (codeArea) {
+                const preStyle = 'background: var(--bg-code, #1e1e1e); color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; line-height: 1.5; overflow-x: auto; white-space: pre-wrap; margin: 0; flex: 1; min-width: 0; align-self: stretch;';
+                const labelStyle = 'font-size: 10px; font-weight: 700; margin-bottom: 4px; color: var(--text-secondary);';
+
+                if (data.db_content && (data.has_drift || data.db_content !== data.content)) {
+                    codeArea.innerHTML = `
+                        <div style="display: flex; gap: 10px; max-height: 420px; overflow-x: auto; width: 100%;">
+                            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+                                <div style="${labelStyle} color: var(--state-danger-text);">CONTENIDO APLICADO EN BD (snapshot al momento del sync):</div>
+                                <pre style="${preStyle}">${escapeHtml(data.db_content)}</pre>
+                            </div>
+                            <div style="flex: 1; min-width: 0; display: flex; flex-direction: column;">
+                                <div style="${labelStyle} color: var(--state-warn-text, #b45309);">CONTENIDO ACTUAL EN DISCO:</div>
+                                <pre style="${preStyle}">${escapeHtml(data.content || '')}</pre>
+                            </div>
+                        </div>
+                    `;
+                } else {
+                    codeArea.innerHTML = `<pre style="${preStyle} max-height: 420px;">${escapeHtml(data.content || '')}</pre>`;
+                }
+            }
         })
         .catch(err => {
             if (metaBox) metaBox.innerHTML = '<span style="color:var(--state-danger-text);">Error al consultar archivo.</span>';
-            if (code) code.textContent = '';
+            if (codeArea) codeArea.innerHTML = '';
         });
 }
 
@@ -375,3 +398,65 @@ function initLazyStatusChecker() {
     });
 }
 
+
+// 5. Mobile & Responsive Sidebars / Drawers Management
+function toggleMobileSidebar() {
+    const sidebarLeft = document.getElementById('sidebarLeft');
+    const sidebarRight = document.getElementById('sidebarRight');
+    const backdrop = document.getElementById('sidebarMobileBackdrop');
+    
+    if (!sidebarLeft) return;
+
+    // Si el inspector derecho estaba abierto, lo cerramos primero
+    if (sidebarRight && sidebarRight.classList.contains('open')) {
+        sidebarRight.classList.remove('open');
+    }
+
+    const isOpen = sidebarLeft.classList.toggle('open');
+    if (backdrop) {
+        backdrop.classList.toggle('open', isOpen);
+    }
+}
+
+function toggleMobileInspector() {
+    const sidebarLeft = document.getElementById('sidebarLeft');
+    const sidebarRight = document.getElementById('sidebarRight');
+    const backdrop = document.getElementById('sidebarMobileBackdrop');
+    
+    if (!sidebarRight) return;
+
+    // Si el menú de entornos estaba abierto, lo cerramos primero
+    if (sidebarLeft && sidebarLeft.classList.contains('open')) {
+        sidebarLeft.classList.remove('open');
+    }
+
+    const isOpen = sidebarRight.classList.toggle('open');
+    if (backdrop) {
+        backdrop.classList.toggle('open', isOpen);
+    }
+}
+
+function closeMobileSidebars() {
+    const sidebarLeft = document.getElementById('sidebarLeft');
+    const sidebarRight = document.getElementById('sidebarRight');
+    const backdrop = document.getElementById('sidebarMobileBackdrop');
+
+    if (sidebarLeft) sidebarLeft.classList.remove('open');
+    if (sidebarRight) sidebarRight.classList.remove('open');
+    if (backdrop) backdrop.classList.remove('open');
+}
+
+// Cerrar paneles móviles con la tecla Escape
+window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        closeMobileSidebars();
+    }
+});
+
+// Cerrar paneles al cambiar el tamaño de ventana a desktop
+window.addEventListener('resize', () => {
+    if (window.innerWidth > 960) {
+        closeMobileSidebars();
+    }
+    updateConnectionWires();
+});

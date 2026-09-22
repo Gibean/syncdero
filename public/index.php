@@ -366,7 +366,24 @@ $gitBranches = $stateEngine->getGitBranches();
 if (empty($gitBranches) && !empty($gitInfo['branch'])) {
     $gitBranches = [$gitInfo['branch']];
 }
-$lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $activeDriver->getLastBatchMigrations() : [];
+
+// Migraciones del último lote aplicado (para el modal de rollback), derivadas
+// de la inspección ya cargada: el batch más alto presente en la tabla de metadatos.
+$lastBatchMigrations = [];
+if (!empty($batches)) {
+    $lastBatchNum = array_key_last($batches);
+    foreach ($batches[$lastBatchNum] as $item) {
+        $lastBatchMigrations[] = [
+            'name' => $item['db']['name'],
+            'batch' => $item['db']['batch'],
+        ];
+    }
+}
+
+// Snapshots de respaldo del entorno activo (para restauración puntual)
+$envBackups = $selectedEnv
+    ? $stateEngine->findBackups($config->getBackupDir(), (string) ($selectedEnv['database'] ?? ''), 8)
+    : [];
 ?>
 <!DOCTYPE html>
 <html lang="es" data-theme="light">
@@ -442,11 +459,23 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
             <polyline points="1 4 1 10 7 10"></polyline>
             <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
         </symbol>
+        <symbol id="icon-menu" viewBox="0 0 24 24">
+            <line x1="4" x2="20" y1="12" y2="12"></line>
+            <line x1="4" x2="20" y1="6" y2="6"></line>
+            <line x1="4" x2="20" y1="18" y2="18"></line>
+        </symbol>
+        <symbol id="icon-x" viewBox="0 0 24 24">
+            <path d="M18 6 6 18"></path>
+            <path d="m6 6 12 12"></path>
+        </symbol>
     </svg>
 
     <!-- Barra de Navegación Superior -->
     <header class="topbar">
         <div class="brand-section">
+            <button type="button" class="btn btn-icon mobile-only" id="mobileMenuBtn" onclick="toggleMobileSidebar()" title="Ver Entornos de BD">
+                <svg class="icon"><use href="#icon-menu"></use></svg>
+            </button>
             <a href="/" class="brand-logo" title="SYNCDERO Home">
                 <!-- Modo Claro: Isotipo Claro-Oscuro + Logo Texto Modo Claro -->
                 <img src="/assets/logo/isotipo-modo-claro-oscuro.webp" alt="SYNCDERO Isotipo" class="brand-isotipo-img logo-light">
@@ -457,9 +486,7 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
                 <img src="/assets/logo/logo-texto-modo-oscuro.webp" alt="SYNCDERO" class="brand-texto-img logo-dark" style="display: none;">
             </a>
             <span class="breadcrumb-divider">/</span>
-            <div class="env-selector-pill">
-
-
+            <div class="env-selector-pill" onclick="toggleMobileSidebar()">
                 <svg class="icon"><use href="#icon-database"></use></svg>
                 <span><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></span>
             </div>
@@ -518,10 +545,12 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
     <div class="workspace-container">
 
         <!-- 1. Barra Lateral: Entornos / Remotes -->
-        <aside class="sidebar-left">
-            <div class="section-label">
-                <span>Entornos de BD</span>
-                <span><?= count($environments) ?></span>
+        <aside class="sidebar-left" id="sidebarLeft">
+            <div class="section-label" style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Entornos de BD (<?= count($environments) ?>)</span>
+                <button type="button" class="btn btn-icon mobile-only" onclick="toggleMobileSidebar()" style="width:22px; height:22px; border:none; background:transparent;" title="Cerrar">
+                    <svg class="icon" style="width:14px; height:14px;"><use href="#icon-x"></use></svg>
+                </button>
             </div>
             <ul class="env-nav-list">
                 <?php foreach ($environments as $envKey => $env): ?>
@@ -665,15 +694,32 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
                 <?php endif; ?>
 
             </div>
+
+            <!-- Botones flotantes móviles para abrir paneles laterales -->
+            <div class="mobile-floating-actions mobile-only">
+                <button type="button" class="btn btn-sm" onclick="toggleMobileSidebar()">
+                    <svg class="icon"><use href="#icon-database"></use></svg>
+                    <span>Entornos</span>
+                </button>
+                <button type="button" class="btn btn-sm btn-brand" onclick="toggleMobileInspector()">
+                    <svg class="icon"><use href="#icon-layers"></use></svg>
+                    <span>Inspector (<?= ($activeInspection['total_disk'] ?? 0) - ($activeInspection['total_applied'] ?? 0) ?>)</span>
+                </button>
+            </div>
         </main>
 
         <!-- 3. Barra Lateral Derecha: Inspector & Staged Files -->
-        <aside class="sidebar-right">
+        <aside class="sidebar-right" id="sidebarRight">
             <div class="sidebar-right-header">
                 <span>Inspector de Cambios</span>
-                <span style="font-family: var(--font-mono); color: var(--text-muted); font-size: 11px;">
-                    <?= $activeInspection['total_applied'] ?? 0 ?>/<?= $activeInspection['total_disk'] ?? 0 ?>
-                </span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span style="font-family: var(--font-mono); color: var(--text-muted); font-size: 11px;">
+                        <?= $activeInspection['total_applied'] ?? 0 ?>/<?= $activeInspection['total_disk'] ?? 0 ?>
+                    </span>
+                    <button type="button" class="btn btn-icon mobile-only" onclick="toggleMobileInspector()" style="width:20px; height:20px; border:none; background:transparent;" title="Cerrar">
+                        <svg class="icon" style="width:14px; height:14px;"><use href="#icon-x"></use></svg>
+                    </button>
+                </div>
             </div>
 
             <!-- Alertas de Conflicto / Drift -->
@@ -707,6 +753,35 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
                             <span style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;"><?= htmlspecialchars($item['file']->basename) ?></span>
                             <span style="color: var(--text-muted);"><?= strtoupper($item['file']->type) ?></span>
                         </div>
+                    <?php endforeach; ?>
+                <?php endif; ?>
+            </div>
+
+            <!-- Snapshots de Respaldo (Restauración Puntual) -->
+            <div class="inspector-section">
+                <div style="font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; margin-bottom: 8px;">
+                    Snapshots de Respaldo
+                </div>
+                <?php if (empty($envBackups)): ?>
+                    <div style="color: var(--text-subtle); font-size: 12px; padding: 6px 0;">
+                        No hay snapshots de este entorno. Genera uno con el botón <strong>Snapshot</strong>.
+                    </div>
+                <?php else: ?>
+                    <?php foreach ($envBackups as $bk): ?>
+                        <form method="POST" style="display:flex; flex-direction:column; gap:4px; padding:6px 8px; border:1px solid var(--border-color); border-radius:4px; margin-bottom:6px;">
+                            <input type="hidden" name="action" value="restore">
+                            <input type="hidden" name="backup_file" value="<?= htmlspecialchars($bk['name']) ?>">
+                            <div style="font-family: var(--font-mono); font-size:10px; color: var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?= htmlspecialchars($bk['name']) ?>">
+                                <?= htmlspecialchars($bk['name']) ?>
+                            </div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
+                                <span style="font-size:10px; color:var(--text-muted);"><?= date('Y-m-d H:i', $bk['modified']) ?> · <?= number_format($bk['size'] / 1024, 1) ?> KB</span>
+                                <button type="submit" class="btn" style="padding:2px 8px; font-size:10px;" title="Restaurar este snapshot en el entorno activo">Restaurar</button>
+                            </div>
+                            <?php if (($selectedEnv['protected'] ?? false) === true): ?>
+                                <input type="password" name="password" placeholder="Contraseña de autorización..." required style="font-size:10px;">
+                            <?php endif; ?>
+                        </form>
                     <?php endforeach; ?>
                 <?php endif; ?>
             </div>
@@ -917,7 +992,7 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
                 <div style="font-size: 11px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px;">
                     Contenido del Script:
                 </div>
-                <pre id="diffCodeContent" style="background: var(--bg-code, #1e1e1e); color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: var(--font-mono); font-size: 12px; line-height: 1.5; overflow-x: auto; white-space: pre-wrap; margin: 0; max-height: 400px;"></pre>
+                <div id="diffCodeArea"></div>
             </div>
             <div class="modal-bottom">
                 <button type="button" class="btn" onclick="closeDiffModal()">Cerrar</button>
@@ -940,10 +1015,11 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
                     <img src="/assets/logo/imagotipo-modo-oscuro-claro.webp" alt="SYNCDERO" class="modal-watermark-logo logo-dark" style="display: none;">
 
                     <p style="margin-bottom: 8px; font-weight: 500; text-align: center;">
-                        ¿Deseas revertir el último lote de migraciones aplicado en <strong><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></strong>?
+                        ¿Deseas revertir los cambios recientes de <strong><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></strong> restaurando el snapshot más reciente?
                     </p>
                     <p style="font-size: 11px; color: var(--text-muted); margin-bottom: 12px; text-align: center;">
-                        Esta acción desregistrará el lote más reciente en la base de datos seleccionada.
+                        Se generará un respaldo de seguridad del estado actual antes de restaurar el snapshot.
+                        La base de datos y su tabla de metadatos volverán al estado del snapshot (migraciones posteriores quedarán rebobinadas).
                     </p>
 
                     <?php if (!empty($lastBatchMigrations)): ?>
@@ -992,6 +1068,9 @@ $lastBatchMigrations = ($activeDriver && $activeDriver->testConnection()) ? $act
             </div>
         </div>
     </div>
+
+    <!-- Telón de fondo móvil para cerrar paneles deslizantes al pulsar fuera -->
+    <div id="sidebarMobileBackdrop" class="sidebar-mobile-backdrop" onclick="closeMobileSidebars()"></div>
 
     <script src="/assets/app.js"></script>
 </body>

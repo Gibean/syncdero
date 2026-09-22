@@ -714,12 +714,175 @@ input:focus {
     border-color: var(--text-primary);
 }
 
-/* Responsive */
+/* Helpers */
+.mobile-only {
+    display: none !important;
+}
+
+/* Telón de fondo para paneles deslizantes en móviles */
+.sidebar-mobile-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 70;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+}
+
+.sidebar-mobile-backdrop.open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+/* Botones de acción flotantes para móvil */
+.mobile-floating-actions {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    z-index: 60;
+    background: var(--bg-surface);
+    padding: 6px 10px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-strong);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+.mobile-floating-actions .btn {
+    box-shadow: none;
+}
+
+/* ==========================================================================
+   Responsive Breakpoints: Tablets y Pantallas Medianas (<= 960px)
+   ========================================================================== */
 @media (max-width: 960px) {
+    .mobile-only {
+        display: inline-flex !important;
+    }
+
     .workspace-container {
         grid-template-columns: 1fr;
+        position: relative;
     }
-    .sidebar-left, .sidebar-right {
+
+    /* Paneles laterales convertidos en Off-Canvas Drawers */
+    .sidebar-left,
+    .sidebar-right {
+        position: fixed;
+        top: 54px;
+        bottom: 0;
+        width: 280px;
+        max-width: 85vw;
+        z-index: 80;
+        box-shadow: 0 0 24px rgba(0, 0, 0, 0.25);
+        transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .sidebar-left {
+        left: 0;
+        transform: translateX(-100%);
+        border-right: 1px solid var(--border-color);
+        background: var(--bg-surface);
+    }
+
+    .sidebar-left.open {
+        transform: translateX(0);
+    }
+
+    .sidebar-right {
+        right: 0;
+        transform: translateX(100%);
+        border-left: 1px solid var(--border-color);
+        background: var(--bg-surface);
+    }
+
+    .sidebar-right.open {
+        transform: translateX(0);
+    }
+
+    .topbar-center {
         display: none;
     }
+
+    .topbar-actions .btn:not(.btn-primary):not(.btn-icon) span {
+        display: none;
+    }
+
+    .topbar-actions .btn:not(.btn-icon) {
+        padding: 0 8px;
+    }
 }
+
+/* ==========================================================================
+   Responsive Breakpoints: Móviles (< 600px)
+   ========================================================================== */
+@media (max-width: 600px) {
+    .topbar {
+        padding: 0 10px;
+        gap: 8px;
+    }
+
+    .brand-section {
+        gap: 6px;
+    }
+
+    .brand-texto-img {
+        display: none !important;
+    }
+
+    .breadcrumb-divider {
+        display: none;
+    }
+
+    .env-selector-pill {
+        max-width: 110px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 11px;
+        padding: 3px 6px;
+    }
+
+    .env-selector-pill span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .topbar-actions {
+        gap: 4px;
+    }
+
+    .topbar-actions .btn-primary span {
+        display: none;
+    }
+
+    .topbar-actions .btn-primary {
+        padding: 0 8px;
+    }
+
+    .modal-window {
+        width: 95%;
+        max-height: 90vh;
+        display: flex;
+        flex-direction: column;
+    }
+
+    .modal-content {
+        overflow-y: auto;
+    }
+
+    .flow-viewport {
+        padding: 16px;
+    }
+
+    .flow-node {
+        width: 270px;
+    }
+}
+
