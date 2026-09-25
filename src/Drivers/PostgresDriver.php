@@ -373,8 +373,23 @@ class PostgresDriver extends AbstractDriver
             $targetDriver->getPdo()->exec($statement);
         }
 
+        // Copiar fila a fila a través de PHP (sin dblink)
+        $pdo = $this->getPdo();
+        $copyRows = function (string $table) use ($pdo, $targetDriver): void {
+            $rows = $pdo->query('SELECT * FROM "' . $table . '"')->fetchAll(\PDO::FETCH_ASSOC);
+            foreach ($rows as $row) {
+                $columns = array_keys($row);
+                $values = array_map(
+                    static fn ($v): string => ($v === null) ? 'NULL' : $pdo->quote((string) $v),
+                    array_values($row)
+                );
+                $targetDriver->getPdo()->exec(
+                    'INSERT INTO "' . $table . '" ("' . implode('", "', $columns) . '") VALUES (' . implode(', ', $values) . ')'
+                );
+            }
+        };
+
         if ($withData) {
-            $pdo = $this->getPdo();
             $tables = $pdo->query("
                 SELECT table_name
                 FROM information_schema.tables
@@ -382,22 +397,16 @@ class PostgresDriver extends AbstractDriver
             ");
             while ($tableRow = $tables->fetch(\PDO::FETCH_NUM)) {
                 $table = $tableRow[0];
-                $insert = $pdo->prepare('INSERT INTO "' . $table . '" SELECT * FROM "' . $table . '"');
-                // Copiar fila a fila a través de PHP (sin dblink)
-                $rows = $pdo->query('SELECT * FROM "' . $table . '"')->fetchAll(\PDO::FETCH_ASSOC);
-                foreach ($rows as $row) {
-                    $columns = array_keys($row);
-                    $values = array_map(
-                        static fn ($v): string => ($v === null) ? 'NULL' : $pdo->quote((string) $v),
-                        array_values($row)
-                    );
-                    $targetDriver->getPdo()->exec(
-                        'INSERT INTO "' . $table . '" ("' . implode('", "', $columns) . '") VALUES (' . implode(', ', $values) . ')'
-                    );
+                if ($table === $this->metaTable) {
+                    continue; // el historial de versionado se hereda siempre, más abajo
                 }
-                unset($insert, $rows);
+                $copyRows($table);
             }
         }
+
+        // El historial de versionado (_syncdero_meta) siempre se hereda a la rama
+        $this->ensureMetadataTable();
+        $copyRows($this->metaTable);
     }
 
     /**

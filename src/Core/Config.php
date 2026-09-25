@@ -108,6 +108,14 @@ class Config
         $this->persist($savePath);
     }
 
+    public function addEnvironment(string $envKey, array $envConfig, string $savePath): void
+    {
+        // Nunca persistir claves derivadas del auto-discovery
+        unset($envConfig['is_discovered'], $envConfig['server_key']);
+        $this->data['environments'][$envKey] = $envConfig;
+        $this->persist($savePath);
+    }
+
     protected function persist(string $filePath): void
     {
         $content = "<?php\n\ndeclare(strict_types=1);\n\nreturn " . var_export($this->data, true) . ";\n";

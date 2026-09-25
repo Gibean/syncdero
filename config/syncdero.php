@@ -14,7 +14,7 @@ return [
     'backup_dir'     => getenv('SYNCDERO_BACKUP_DIR') ?: (__DIR__ . '/../backups'),
     'repo_dir'       => getenv('SYNCDERO_REPO_DIR') ?: (__DIR__ . '/../.git'),
 
-    // Seguridad para ambientes protegidos
+    // Seguridad para ambientes protegidos (solo vía variable de entorno, jamás hardcodeada)
     'apply_password' => getenv('SYNCDERO_APPLY_PASSWORD') ?: '',
 
     // Instancias de Servidores con Auto-Discovery (Estilo HeidiSQL)

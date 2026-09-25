@@ -228,5 +228,21 @@ class SqliteDriver extends AbstractDriver
         foreach (\Syncdero\Core\SqlSplitter::split($ddl) as $statement) {
             $targetPdo->exec($statement);
         }
+
+        // El historial de versionado (_syncdero_meta) siempre se hereda a la rama
+        $this->ensureMetadataTable();
+        $srcPdo = $this->getPdo();
+        $rows = $srcPdo->query("SELECT * FROM \"{$this->metaTable}\"")->fetchAll(\PDO::FETCH_ASSOC);
+        foreach ($rows as $row) {
+            $cols = array_keys($row);
+            $vals = array_map(
+                static fn ($v): string => ($v === null) ? 'NULL' : $targetPdo->quote((string) $v),
+                array_values($row)
+            );
+            $targetPdo->exec(
+                'INSERT INTO "' . $this->metaTable . '" ("' . implode('", "', $cols)
+                . '") VALUES (' . implode(', ', $vals) . ')'
+            );
+        }
     }
 }

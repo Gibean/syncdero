@@ -26,8 +26,7 @@ final class SqlSplitter
 
             // Comentario de línea: -- ... o # ... (hasta fin de línea)
             if (($char === '-' && $next === '-') || $char === '#') {
-                $lineComment = ($char === '#') ? "\n" : "\n";
-                $end = strpos($sql, $lineComment, $i);
+                $end = strpos($sql, "\n", $i);
                 $end = ($end === false) ? $length : $end;
                 $current .= substr($sql, $i, $end - $i);
                 $i = $end;
@@ -81,12 +80,13 @@ final class SqlSplitter
 
     /**
      * Lee una cadena entre comillas (con soporte de escape '' y \" y backslash).
+     * Avanza $pos hasta justo después de la comilla de cierre.
      */
-    private static function readQuoted(string $sql, int $start, string $quote): string
+    private static function readQuoted(string $sql, int &$pos, string $quote): string
     {
         $length = strlen($sql);
-        $i = $start + 1;
-        $out = $sql[$start];
+        $i = $pos + 1;
+        $out = $sql[$pos];
 
         while ($i < $length) {
             $char = $sql[$i];
@@ -108,6 +108,7 @@ final class SqlSplitter
                     continue;
                 }
                 $out .= $char;
+                $pos = $i + 1;
                 return $out;
             }
 
@@ -115,17 +116,19 @@ final class SqlSplitter
             $i++;
         }
 
+        $pos = $i;
         return $out;
     }
 
     /**
      * Lee un identificador entre backticks.
+     * Avanza $pos hasta justo después del backtick de cierre.
      */
-    private static function readBackticked(string $sql, int $start): string
+    private static function readBackticked(string $sql, int &$pos): string
     {
         $length = strlen($sql);
-        $i = $start + 1;
-        $out = $sql[$start];
+        $i = $pos + 1;
+        $out = $sql[$pos];
 
         while ($i < $length) {
             $char = $sql[$i];
@@ -137,11 +140,13 @@ final class SqlSplitter
                     $i += 2;
                     continue;
                 }
+                $pos = $i + 1;
                 return $out;
             }
             $i++;
         }
 
+        $pos = $i;
         return $out;
     }
 

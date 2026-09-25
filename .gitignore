@@ -2,7 +2,10 @@
 .env
 .env.local
 .env.*.local
+config/syncdero.php
 config/syncdero.local.php
+config/*.local.php
+docker-compose.override.yml
 
 # Backups y volcados de bases de datos
 backups/*

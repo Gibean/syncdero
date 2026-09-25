@@ -261,9 +261,15 @@ class MySqlDriver extends AbstractDriver
             $table = $row[0];
             // CREATE TABLE ... LIKE replica estructura e índices sin datos
             $pdo->exec("CREATE TABLE `{$safeTarget}`.`{$table}` LIKE `{$sourceDb}`.`{$table}`");
-            if ($withData) {
+            if ($withData && $table !== $this->metaTable) {
                 $pdo->exec("INSERT INTO `{$safeTarget}`.`{$table}` SELECT * FROM `{$sourceDb}`.`{$table}`");
             }
         }
+
+        // El historial de versionado (_syncdero_meta) siempre se hereda a la rama
+        $this->ensureMetadataTable();
+        $pdo->exec(
+            "INSERT INTO `{$safeTarget}`.`{$this->metaTable}` SELECT * FROM `{$sourceDb}`.`{$this->metaTable}`"
+        );
     }
 }

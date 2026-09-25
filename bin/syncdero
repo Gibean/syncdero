@@ -60,12 +60,15 @@ function printHelp(): void {
     echo "             Uso: php bin/syncdero sync <entorno> [--dry-run] [--no-backup]\n";
     echo "  \033[1;32mdiff\033[0m       Muestra el diff y contenido de migraciones pendientes o conflictivas.\n";
     echo "             Uso: php bin/syncdero diff <entorno>\n";
+    echo "             Compara dos entornos: php bin/syncdero diff <entornoA> <entornoB>\n";
     echo "  \033[1;32mbackup\033[0m     Genera un snapshot manual del entorno indicado.\n";
     echo "             Uso: php bin/syncdero backup <entorno>\n";
     echo "  \033[1;32mrestore\033[0m    Restaura un snapshot de respaldo en el entorno indicado.\n";
     echo "             Uso: php bin/syncdero restore <entorno> [--file=<archivo>]\n";
     echo "  \033[1;32mrollback\033[0m   Deshace los cambios recientes restaurando el snapshot más reciente.\n";
-    echo "             Uso: php bin/syncdero rollback <entorno>\n\n";
+    echo "             Uso: php bin/syncdero rollback <entorno>\n";
+    echo "  \033[1;32mbranch\033[0m     Crea una rama (copia de esquema) de un entorno como nueva base de datos.\n";
+    echo "             Uso: php bin/syncdero branch <entorno> <nombre> [--with-data]\n\n";
 }
 
 // Ejecución de comandos
@@ -384,8 +387,91 @@ switch ($command) {
 
         $envConfig = $config->getEnvironment($targetEnv);
         if (!$envConfig) {
-            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado.\033[0m\n");
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$targetEnv}' no encontrado en la configuración.\033[0m\n");
             exit(1);
+        }
+
+        // Modo comparación entre dos entornos: diff <entornoA> <entornoB>
+        $secondEnv = null;
+        foreach (array_slice($args, 2) as $a) {
+            $a = (string) $a;
+            if ($a !== '' && !str_starts_with($a, '--')) {
+                $secondEnv = $a;
+                break;
+            }
+        }
+
+        if ($secondEnv !== null) {
+            $envBConfig = $config->getEnvironment($secondEnv);
+            if (!$envBConfig) {
+                fwrite(STDERR, "\033[1;31mError: Entorno '{$secondEnv}' no encontrado en la configuración.\033[0m\n");
+                exit(1);
+            }
+
+            printHeader();
+            echo "Comparación de estados entre \033[1;33m{$targetEnv}\033[0m y \033[1;33m{$secondEnv}\033[0m\n\n";
+
+            $driverA = DriverFactory::create($envConfig);
+            if (!$driverA->testConnection()) {
+                fwrite(STDERR, "\033[1;31mError: No se pudo conectar a '{$targetEnv}'.\033[0m\n");
+                exit(1);
+            }
+            $driverB = DriverFactory::create($envBConfig);
+            if (!$driverB->testConnection()) {
+                fwrite(STDERR, "\033[1;31mError: No se pudo conectar a '{$secondEnv}'.\033[0m\n");
+                exit(1);
+            }
+
+            $appliedA = $driverA->getAppliedMigrations();
+            $appliedB = $driverB->getAppliedMigrations();
+
+            $onlyInA = array_diff_key($appliedA, $appliedB);
+            $onlyInB = array_diff_key($appliedB, $appliedA);
+            $hashConflicts = [];
+            foreach ($appliedA as $name => $rowA) {
+                if (isset($appliedB[$name]) && $appliedB[$name]['hash'] !== $rowA['hash']) {
+                    $hashConflicts[$name] = ['a' => $rowA['hash'], 'b' => $appliedB[$name]['hash']];
+                }
+            }
+
+            echo "Aplicadas en {$targetEnv}: " . count($appliedA) . " | Aplicadas en {$secondEnv}: " . count($appliedB) . "\n\n";
+
+            if (!empty($onlyInA)) {
+                echo "\033[1;33m=== APLICADAS EN {$targetEnv} PERO NO EN {$secondEnv} (pendientes en {$secondEnv}) ===\033[0m\n";
+                foreach ($onlyInA as $name => $row) {
+                    echo "  - {$name} (Batch #{$row['batch']}, aplicada {$row['applied_at']})\n";
+                }
+                echo "\n";
+            }
+
+            if (!empty($onlyInB)) {
+                echo "\033[1;33m=== APLICADAS EN {$secondEnv} PERO NO EN {$targetEnv} (pendientes en {$targetEnv}) ===\033[0m\n";
+                foreach ($onlyInB as $name => $row) {
+                    echo "  - {$name} (Batch #{$row['batch']}, aplicada {$row['applied_at']})\n";
+                }
+                echo "\n";
+            }
+
+            if (!empty($hashConflicts)) {
+                echo "\033[1;31m=== CONFLICTOS DE HASH ENTRE ENTORNOS (misma migración, contenido distinto) ===\033[0m\n";
+                foreach ($hashConflicts as $name => $h) {
+                    echo "  Archivo: \033[1;37m{$name}\033[0m\n";
+                    echo "    Hash en {$targetEnv}:  {$h['a']}\n";
+                    echo "    Hash en {$secondEnv}:  {$h['b']}\n";
+                }
+                echo "\n";
+            }
+
+            if (empty($onlyInA) && empty($onlyInB) && empty($hashConflicts)) {
+                echo "\033[1;32mAmbos entornos tienen aplicado exactamente el mismo conjunto de migraciones (hashes incluidos).\033[0m\n";
+                exit(0);
+            }
+
+            if (!empty($hashConflicts)) {
+                fwrite(STDERR, "\033[1;31mDivergencia entre entornos detectada: " . count($hashConflicts) . " migración(es) con hash distinto.\033[0m\n");
+                exit(1);
+            }
+            exit(0);
         }
 
         printHeader();
@@ -419,6 +505,80 @@ switch ($command) {
         if (empty($inspection['divergent']) && empty($inspection['pending'])) {
             echo "\033[1;32mNo hay diferencias. El entorno está 100% sincronizado con el disco.\033[0m\n";
         }
+        exit(0);
+
+    case 'branch':
+        $sourceEnv = $args[1] ?? null;
+        $branchName = $args[2] ?? null;
+        if (!$sourceEnv || !$branchName) {
+            fwrite(STDERR, "\033[1;31mError: Uso: php bin/syncdero branch <entorno> <nombre> [--with-data]\033[0m\n");
+            exit(1);
+        }
+
+        $envConfig = $config->getEnvironment($sourceEnv);
+        if (!$envConfig) {
+            fwrite(STDERR, "\033[1;31mError: Entorno '{$sourceEnv}' no encontrado en la configuración.\033[0m\n");
+            exit(1);
+        }
+
+        $slug = strtolower((string) preg_replace('/[^a-zA-Z0-9_-]+/', '_', trim($branchName)));
+        $slug = trim($slug, '_');
+        if ($slug === '' || strlen($slug) > 63) {
+            fwrite(STDERR, "\033[1;31mError: Nombre de rama inválido tras sanear (usa letras, números, guiones).\033[0m\n");
+            exit(1);
+        }
+
+        $withData = in_array('--with-data', $args, true);
+
+        printHeader();
+        echo "Creando rama \033[1;35m{$slug}\033[0m desde \033[1;33m{$sourceEnv}\033[0m" . ($withData ? " (con datos)" : " (solo esquema)") . "\n\n";
+
+        if ($config->getEnvironment($slug) !== null) {
+            fwrite(STDERR, "\033[1;31mError: Ya existe un entorno llamado '{$slug}' en la configuración.\033[0m\n");
+            exit(1);
+        }
+
+        $driver = DriverFactory::create($envConfig);
+        if (!$driver->testConnection()) {
+            fwrite(STDERR, "\033[1;31mError: No se pudo conectar al entorno de origen '{$sourceEnv}'.\033[0m\n");
+            exit(1);
+        }
+
+        $isSqlite = ($envConfig['driver'] ?? '') === 'sqlite';
+
+        // Garantiza que el origen tenga historial de versionado que heredar
+        $driver->ensureMetadataTable();
+
+        if (!$isSqlite) {
+            echo "Creando base de datos destino '{$slug}'...";
+            $driver->createDatabase($slug);
+            echo " \033[1;32mOK\033[0m\n";
+        }
+
+        echo "Copiando esquema" . ($withData ? " y datos" : "") . "...";
+        $driver->copySchemaTo($slug, $withData);
+        echo " \033[1;32mOK\033[0m\n";
+
+        $branchConfig = $envConfig;
+        unset($branchConfig['is_discovered'], $branchConfig['server_key'], $branchConfig['label']);
+        $branchConfig['label'] = 'Rama ' . $branchName . ' (de ' . ($envConfig['label'] ?? $sourceEnv) . ')';
+        $branchConfig['role'] = 'dev';
+        $branchConfig['protected'] = false;
+        $branchConfig['branch_of'] = $sourceEnv;
+        $branchConfig['color'] = '#a855f7';
+        if ($isSqlite) {
+            $branchConfig['database'] = rtrim(dirname((string) $envConfig['database']), '/\\')
+                . DIRECTORY_SEPARATOR . $slug . '.sqlite';
+        } else {
+            $branchConfig['database'] = $slug;
+        }
+
+        echo "Registrando entorno en la configuración...";
+        $config->addEnvironment($slug, $branchConfig, $configPath);
+        echo " \033[1;32mOK\033[0m\n";
+
+        echo "\n\033[1;32m✓ Rama creada: \033[0mLa base de datos '{$slug}' replica el historial de versionado de '{$sourceEnv}'.\n";
+        echo "Ahora aparece como entorno en 'status' y en el dashboard: \033[0;37mphp bin/syncdero status\033[0m\n";
         exit(0);
 
     default:

@@ -1,3 +1,7 @@
+# SYNCDERO - Stack local de desarrollo
+# Credenciales overridables vía archivo .env (ya ignorado por git):
+#   cp .env.example .env
+
 services:
   syncdero:
     build: .
@@ -9,14 +13,17 @@ services:
       - ./backups:/app/backups
       - ./.git:/app/.git:ro
     environment:
-      - SYNCDERO_APPLY_PASSWORD=secret
-      - MARIADB_HOST=mariadb
-      - MARIADB_PORT=3306
-      - MARIADB_DATABASE=app_db
-      - MARIADB_USER=root
-      - MARIADB_PASSWORD=root
-      - PG_HOST=postgres
-      - PG_PORT=5432
-      - PG_USER=postgres
-      - PG_PASSWORD=postgres
+      # Credenciales obligatoriamente vía .env (ver .env.example).
+      # Sin fallback hardcodeado: compose falla si no están definidas.
+      - SYNCDERO_APPLY_PASSWORD=${SYNCDERO_APPLY_PASSWORD:?Defina SYNCDERO_APPLY_PASSWORD en .env}
+      - MARIADB_HOST=${MARIADB_HOST:-mariadb}
+      - MARIADB_PORT=${MARIADB_PORT:-3306}
+      - MARIADB_DATABASE=${MARIADB_DATABASE:-app_db}
+      - MARIADB_USER=${MARIADB_USER:-root}
+      - MARIADB_PASSWORD=${MARIADB_PASSWORD:?Defina MARIADB_PASSWORD en .env}
+      - PG_HOST=${PG_HOST:-postgres}
+      - PG_PORT=${PG_PORT:-5432}
+      - PG_USER=${PG_USER:-postgres}
+      - PG_DATABASE=${PG_DATABASE:-app_db}
+      - PG_PASSWORD=${PG_PASSWORD:?Defina PG_PASSWORD en .env}
     restart: unless-stopped
