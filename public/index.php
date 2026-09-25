@@ -31,6 +31,7 @@ if (!file_exists($configPath)) {
 $config = Config::load($configPath);
 $stateEngine = new StateEngine($config->getMigrationsDir(), $config->getRepoDir());
 $gitInfo = $stateEngine->getGitInfo();
+$gitAuthor = $stateEngine->getGitAuthor();
 $environments = $config->getEnvironments();
 
 // Entorno seleccionado
@@ -63,11 +64,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
                 $messageType = 'info';
             } else {
                 $driver->createBackup($config->getBackupDir());
-                $syncRes = $stateEngine->syncPending($driver, $inspection['pending'], 'web_client', $notes);
+                $authorName = trim($_POST['author_name'] ?? '');
+                $authorEmail = trim($_POST['author_email'] ?? '');
+                $appliedBy = ($authorName !== '')
+                    ? ($authorEmail !== '' ? "{$authorName} <{$authorEmail}>" : $authorName)
+                    : ($gitAuthor['signature'] ?? 'developer');
+
+                $syncRes = $stateEngine->syncPending($driver, $inspection['pending'], $appliedBy, $notes);
 
                 if ($syncRes['success']) {
                     $noteMsg = $notes ? " [Nota: {$notes}]" : "";
-                    $message = "Sincronización completada: {$syncRes['applied_count']} migración(es) aplicada(s) en {$syncRes['duration_ms']}ms (Batch #{$syncRes['batch']}){$noteMsg}.";
+                    $message = "Sincronización completada: {$syncRes['applied_count']} migración(es) aplicada(s) por {$appliedBy} en {$syncRes['duration_ms']}ms (Batch #{$syncRes['batch']}){$noteMsg}.";
                     $messageType = 'success';
                 } else {
                     $message = "Error en la ejecución: " . json_encode($syncRes['errors']);
@@ -253,16 +260,35 @@ if (isset($_GET['api_status'])) {
 // Endpoint API JSON para previsualizar código de migración y diff
 if (isset($_GET['api_preview'])) {
     header('Content-Type: application/json');
-    $filename = basename($_GET['api_preview']);
-    $filePath = $config->getMigrationsDir() . DIRECTORY_SEPARATOR . $filename;
+    $param = basename(trim($_GET['api_preview']));
+    $migrationsDir = $config->getMigrationsDir();
+    $filePath = null;
+    $filename = null;
 
-    if (!file_exists($filePath)) {
-        echo json_encode(['success' => false, 'error' => 'Archivo no encontrado']);
+    // Buscar coincidencia exacta por nombre de archivo o por basename (sin extensión)
+    if (file_exists($migrationsDir . DIRECTORY_SEPARATOR . $param) && is_file($migrationsDir . DIRECTORY_SEPARATOR . $param)) {
+        $filePath = $migrationsDir . DIRECTORY_SEPARATOR . $param;
+        $filename = $param;
+    } else {
+        foreach (scandir($migrationsDir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') continue;
+            if (pathinfo($entry, PATHINFO_FILENAME) === $param || $entry === $param) {
+                $filePath = $migrationsDir . DIRECTORY_SEPARATOR . $entry;
+                $filename = $entry;
+                break;
+            }
+        }
+    }
+
+    if ($filePath === null || !file_exists($filePath)) {
+        echo json_encode(['success' => false, 'error' => 'Archivo no encontrado: ' . $param]);
         exit;
     }
 
+    $basename = pathinfo($filename, PATHINFO_FILENAME);
     $content = file_get_contents($filePath);
-    $diskHash = hash('sha256', $content);
+    $normalizedContent = str_replace("\r\n", "\n", $content);
+    $diskHash = hash('sha256', $normalizedContent);
 
     // Si hay un entorno seleccionado y driver conectado, ver hash en BD
     $dbHash = null;
@@ -278,14 +304,15 @@ if (isset($_GET['api_preview'])) {
             $d = DriverFactory::create($selectedEnv);
             if ($d->testConnection()) {
                 $applied = $d->getAppliedMigrations();
-                if (isset($applied[$filename])) {
-                    $dbHash = $applied[$filename]['hash'];
-                    $appliedAt = $applied[$filename]['applied_at'];
-                    $batch = $applied[$filename]['batch'];
-                    $gitCommit = $applied[$filename]['git_commit'] ?? null;
-                    $gitBranch = $applied[$filename]['git_branch'] ?? null;
-                    $notes = $applied[$filename]['note'] ?? null;
-                    $dbContent = $applied[$filename]['content'] ?? null;
+                $rec = $applied[$basename] ?? ($applied[$filename] ?? null);
+                if ($rec !== null) {
+                    $dbHash = $rec['hash'];
+                    $appliedAt = $rec['applied_at'];
+                    $batch = $rec['batch'];
+                    $gitCommit = $rec['git_commit'] ?? null;
+                    $gitBranch = $rec['git_branch'] ?? null;
+                    $notes = $rec['note'] ?? null;
+                    $dbContent = $rec['content'] ?? null;
                 }
             }
         } catch (\Throwable $e) {
@@ -459,6 +486,21 @@ $envBackups = $selectedEnv
             <polyline points="1 4 1 10 7 10"></polyline>
             <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
         </symbol>
+        <symbol id="icon-user" viewBox="0 0 24 24">
+            <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
+        </symbol>
+        <symbol id="icon-table" viewBox="0 0 24 24">
+            <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+            <path d="M3 9h18"></path>
+            <path d="M3 15h18"></path>
+            <path d="M9 3v18"></path>
+        </symbol>
+        <symbol id="icon-layout" viewBox="0 0 24 24">
+            <rect width="18" height="18" x="3" y="3" rx="2"></rect>
+            <path d="M3 9h18"></path>
+            <path d="M9 21V9"></path>
+        </symbol>
         <symbol id="icon-menu" viewBox="0 0 24 24">
             <line x1="4" x2="20" y1="12" y2="12"></line>
             <line x1="4" x2="20" y1="6" y2="6"></line>
@@ -498,9 +540,31 @@ $envBackups = $selectedEnv
                 <span><?= htmlspecialchars($gitInfo['branch']) ?></span>
                 <span style="color: var(--text-muted);">(<?= htmlspecialchars($gitInfo['commit']) ?>)</span>
             </div>
+
+            <!-- Selector de Vista: Tabla / Línea de Tiempo vs Lienzo Visual -->
+            <div class="view-mode-toggle" id="viewModeToggle">
+                <button type="button" class="view-btn active" id="viewBtnTable" onclick="switchViewMode('table')" title="Vista Tabla / Historial Estructurado">
+                    <svg class="icon" style="width:13px; height:13px;"><use href="#icon-table"></use></svg>
+                    <span>Historial</span>
+                </button>
+                <button type="button" class="view-btn" id="viewBtnCanvas" onclick="switchViewMode('canvas')" title="Vista Lienzo Visual / Diagrama de Flujo">
+                    <svg class="icon" style="width:13px; height:13px;"><use href="#icon-layout"></use></svg>
+                    <span>Lienzo</span>
+                </button>
+            </div>
         </div>
 
         <div class="topbar-actions">
+            <!-- Perfil de Desarrollador Activo (Firma y Credenciales) -->
+            <button type="button" class="btn dev-profile-btn" onclick="openProfileModal()" title="Perfil del Desarrollador y Credenciales de Sesión">
+                <div class="dev-avatar-circle" id="topbarAvatarLetter">
+                    <?= strtoupper(substr($gitAuthor['name'] ?? 'D', 0, 1)) ?>
+                </div>
+                <span id="topbarDevName" style="max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                    <?= htmlspecialchars($gitAuthor['name'] ?? 'Developer') ?>
+                </span>
+            </button>
+
             <button type="button" class="btn btn-icon" onclick="openHelpModal()" title="Manual de Uso Técnico">
                 <svg class="icon"><use href="#icon-help"></use></svg>
             </button>
@@ -584,14 +648,134 @@ $envBackups = $selectedEnv
             </div>
         </aside>
 
-        <!-- 2. Canvas Central: Dot Grid & Draggable Flow Cards -->
-        <main class="canvas-area">
+        <!-- 2. Canvas Central: Dot Grid & Draggable Flow Cards / Vista Tabla Lineal -->
+        <main class="canvas-area" id="mainWorkspaceArea">
             
             <!-- Watermark Desktop Background (Low opacity centered + slight blur) -->
             <img src="/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO Watermark" class="canvas-watermark logo-light">
             <img src="/assets/logo/imagotipo-modo-oscuro-claro.webp" alt="SYNCDERO Watermark" class="canvas-watermark logo-dark" style="display: none;">
 
-            <div class="flow-viewport" id="flowViewport">
+            <!-- A. VISTA 1 (POR DEFECTO): Tabla / Línea de Tiempo Estructurada -->
+            <div class="timeline-table-view" id="timelineTableView">
+                <div class="timeline-table-header">
+                    <div class="timeline-title-row">
+                        <div>
+                            <h2 style="font-size: 15px; font-weight: 700; letter-spacing: -0.2px;">Control de Versiones de Base de Datos</h2>
+                            <p style="font-size: 12px; color: var(--text-muted); margin-top: 2px;">
+                                Entorno: <strong><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></strong> · 
+                                Motor: <strong><?= strtoupper($selectedEnv['driver'] ?? 'N/A') ?></strong> · 
+                                Sincronizados: <strong><?= $activeInspection['total_applied'] ?? 0 ?> / <?= $activeInspection['total_disk'] ?? 0 ?></strong>
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 8px;">
+                            <?php if (!empty($pendingList)): ?>
+                                <button type="button" class="btn btn-primary" onclick="openSyncModal()">
+                                    <svg class="icon" style="stroke: #ffffff;"><use href="#icon-play"></use></svg>
+                                    <span>Sincronizar Pendientes (<?= count($pendingList) ?>)</span>
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="table-card">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th style="width: 130px;">Estado</th>
+                                <th>Migración / Script</th>
+                                <th style="width: 80px;">Lote</th>
+                                <th style="width: 140px;">Aplicado Por</th>
+                                <th style="width: 130px;">Fecha</th>
+                                <th style="width: 110px;">Hash SHA</th>
+                                <th style="width: 80px; text-align: right;">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <!-- Divergencias primero si las hay -->
+                            <?php foreach ($divergentList as $name => $divItem): ?>
+                                <tr class="row-drift" onclick="openDiffModal('<?= htmlspecialchars($name, ENT_QUOTES) ?>')">
+                                    <td><span class="status-badge badge-danger">DIVERGENTE</span></td>
+                                    <td>
+                                        <div style="font-weight: 600;"><?= htmlspecialchars($divItem['file']->basename) ?></div>
+                                        <div style="font-size: 10px; color: var(--state-danger-text);">El script en disco no coincide con el hash en la BD</div>
+                                    </td>
+                                    <td><span style="font-family: var(--font-mono);">#<?= $divItem['db']['batch'] ?></span></td>
+                                    <td><?= htmlspecialchars($divItem['db']['applied_by'] ?? 'sistema') ?></td>
+                                    <td><?= htmlspecialchars($divItem['db']['applied_at'] ?? 'N/A') ?></td>
+                                    <td><code style="font-size: 10px;"><?= substr($divItem['file']->hash, 0, 8) ?>...</code></td>
+                                    <td style="text-align: right;">
+                                        <button type="button" class="btn btn-sm btn-danger" style="font-size: 10px; padding: 2px 6px;">Ver Diff</button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+
+                            <!-- Migraciones Pendientes -->
+                            <?php foreach ($pendingList as $item): ?>
+                                <tr class="row-pending" onclick="openDiffModal('<?= htmlspecialchars($item['file']->basename, ENT_QUOTES) ?>')">
+                                    <td><span class="status-badge badge-warn">PENDIENTE</span></td>
+                                    <td>
+                                        <div style="font-weight: 600;"><?= htmlspecialchars($item['file']->basename) ?></div>
+                                        <div style="font-size: 11px; color: var(--text-muted);"><?= htmlspecialchars($item['file']->description) ?></div>
+                                    </td>
+                                    <td><span style="color: var(--text-muted); font-size: 11px;">Próximo</span></td>
+                                    <td><span style="color: var(--text-muted); font-size: 11px;">En espera</span></td>
+                                    <td><span style="color: var(--text-muted); font-size: 11px;">Sin aplicar</span></td>
+                                    <td><code style="font-size: 10px;"><?= substr($item['file']->hash, 0, 8) ?>...</code></td>
+                                    <td style="text-align: right;">
+                                        <button type="button" class="btn btn-sm" style="font-size: 10px; padding: 2px 6px;">Ver SQL</button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+
+                            <!-- Migraciones Aplicadas en orden cronológico inverso -->
+                            <?php 
+                                $appliedRows = [];
+                                foreach ($batches as $bNum => $items) {
+                                    foreach ($items as $it) {
+                                        $appliedRows[] = array_merge($it, ['batch_num' => $bNum]);
+                                    }
+                                }
+                                $appliedRows = array_reverse($appliedRows);
+                            ?>
+                            <?php if (empty($appliedRows) && empty($pendingList) && empty($divergentList)): ?>
+                                <tr>
+                                    <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 32px;">
+                                        No hay migraciones registradas para este entorno.
+                                    </td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($appliedRows as $row): ?>
+                                    <tr onclick="openDiffModal('<?= htmlspecialchars($row['file']->basename, ENT_QUOTES) ?>')">
+                                        <td><span class="status-badge badge-sync">SINCRONIZADO</span></td>
+                                        <td>
+                                            <div style="font-weight: 500;"><?= htmlspecialchars($row['file']->basename) ?></div>
+                                            <?php if (!empty($row['db']['note'])): ?>
+                                                <div style="font-size: 10px; color: var(--text-muted); font-style: italic;">"<?= htmlspecialchars($row['db']['note']) ?>"</div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td><span style="font-family: var(--font-mono); font-weight: 600;">#<?= $row['batch_num'] ?></span></td>
+                                        <td>
+                                            <div style="font-size: 11px;"><?= htmlspecialchars($row['db']['applied_by'] ?? 'sistema') ?></div>
+                                            <?php if (!empty($row['db']['git_commit'])): ?>
+                                                <div style="font-family: var(--font-mono); font-size: 10px; color: var(--text-muted);"><?= htmlspecialchars($row['db']['git_commit']) ?></div>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td style="font-size: 11px;"><?= htmlspecialchars($row['db']['applied_at'] ?? 'N/A') ?></td>
+                                        <td><code style="font-size: 10px;"><?= substr($row['file']->hash, 0, 8) ?>...</code></td>
+                                        <td style="text-align: right;">
+                                            <button type="button" class="btn btn-sm" style="font-size: 10px; padding: 2px 6px;">Detalle</button>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- B. VISTA 2 (OPCIONAL): Diagrama / Lienzo de Nodos Flow -->
+            <div class="flow-viewport" id="flowViewport" style="display: none;">
                 <!-- SVG Wire Connections -->
                 <svg id="flowSvgWires" class="flow-connections-svg"></svg>
 
@@ -847,7 +1031,15 @@ $envBackups = $selectedEnv
                             </label>
                             <input type="text" name="notes" placeholder="Ej: Fix tabla clientes, sprint 4..." style="width: 100%;">
                         </div>
+
+                        <div style="margin-top: 8px; font-size: 10px; color: var(--text-muted); display: flex; align-items: center; gap: 4px;">
+                            <svg class="icon" style="width:11px; height:11px;"><use href="#icon-user"></use></svg>
+                            <span>Firma de autor: <strong id="syncModalAuthorPreview" style="color: var(--text-primary);"><?= htmlspecialchars($gitAuthor['signature']) ?></strong></span>
+                        </div>
                     </div>
+
+                    <input type="hidden" name="author_name" id="syncInputAuthorName" value="<?= htmlspecialchars($gitAuthor['name']) ?>">
+                    <input type="hidden" name="author_email" id="syncInputAuthorEmail" value="<?= htmlspecialchars($gitAuthor['email']) ?>">
 
                     <?php if (($selectedEnv['protected'] ?? false) === true): ?>
                         <div style="margin-top: 12px;">
@@ -1065,6 +1257,55 @@ $envBackups = $selectedEnv
             </div>
             <div class="modal-bottom">
                 <button type="button" class="btn" onclick="closeHelpModal()">Entendido</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Perfil de Desarrollador y Credenciales de Sesión -->
+    <div id="profileModal" class="modal-layer">
+        <div class="modal-window" style="max-width: 480px;">
+            <div class="modal-title-bar">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <svg class="icon"><use href="#icon-user"></use></svg>
+                    <span>Perfil de Desarrollador & Credenciales</span>
+                </div>
+                <span onclick="closeProfileModal()" style="cursor: pointer; color: var(--text-muted);">✕</span>
+            </div>
+            <div class="modal-content">
+                <p style="font-size: 12px; color: var(--text-secondary); margin-bottom: 14px;">
+                    Configura tu firma personal para auditar qué desarrollador aplicó cada migración en la base de datos y guarda tu contraseña de entornos protegidos en la sesión del navegador.
+                </p>
+
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px;">Nombre del Desarrollador:</label>
+                    <input type="text" id="devProfileName" value="<?= htmlspecialchars($gitAuthor['name']) ?>" placeholder="Ej: Gisvel Aray">
+                </div>
+
+                <div style="margin-bottom: 12px;">
+                    <label style="display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px;">Email de Autoría:</label>
+                    <input type="text" id="devProfileEmail" value="<?= htmlspecialchars($gitAuthor['email']) ?>" placeholder="Ej: gisvel@empresa.com">
+                </div>
+
+                <div style="margin-bottom: 14px;">
+                    <label style="display: block; font-size: 11px; font-weight: 600; margin-bottom: 4px; color: var(--brand-primary);">
+                        Contraseña de Entornos Protegidos (Sesión):
+                    </label>
+                    <input type="password" id="devProfilePassword" placeholder="Guardar clave en memoria temporal...">
+                    <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px;">
+                        Se almacena únicamente en <code>sessionStorage</code> del navegador. Se autorrellenará automáticamente al sincronizar entornos protegidos (como Producción) sin guardarse en archivos.
+                    </div>
+                </div>
+
+                <div style="background: var(--bg-subtle); border: 1px solid var(--border-color); border-radius: 4px; padding: 10px; font-size: 11px;">
+                    <strong>Firma Resultante en la BD:</strong>
+                    <div id="devProfileSignaturePreview" style="font-family: var(--font-mono); color: var(--text-primary); margin-top: 4px;">
+                        <?= htmlspecialchars($gitAuthor['signature']) ?>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-bottom">
+                <button type="button" class="btn" onclick="closeProfileModal()">Cerrar</button>
+                <button type="button" class="btn btn-primary" onclick="saveDeveloperProfile()">Guardar en Sesión</button>
             </div>
         </div>
     </div>

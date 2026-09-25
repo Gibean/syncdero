@@ -47,7 +47,9 @@ class StateEngine
 
             $basename = pathinfo($entry, PATHINFO_FILENAME);
             $content = file_get_contents($path);
-            $hash = hash('sha256', $content);
+            // Normalizar saltos de línea (CRLF -> LF) para evitar falsos drifts por checkout de Git
+            $normalizedContent = str_replace("\r\n", "\n", $content);
+            $hash = hash('sha256', $normalizedContent);
 
             $cleanDesc = preg_replace('/^\d{4}_\d{2}_\d{2}_\d{6}_/', '', $basename);
             $cleanDesc = preg_replace('/^V\d+__/', '', $cleanDesc);
@@ -407,6 +409,50 @@ class StateEngine
             }
         }
         return $branches;
+    }
+
+    /**
+     * Obtiene el autor actual de Git (nombre e email) leyendo la configuración o el entorno.
+     * @return array{name: string, email: string, signature: string}
+     */
+    public function getGitAuthor(): array
+    {
+        $defaultName = getenv('SYNCDERO_AUTHOR_NAME') ?: (getenv('USERNAME') ?: 'Developer');
+        $defaultEmail = getenv('SYNCDERO_AUTHOR_EMAIL') ?: 'dev@local';
+
+        $configFile = $this->repoDir . DIRECTORY_SEPARATOR . 'config';
+        if (file_exists($configFile)) {
+            $content = (string) file_get_contents($configFile);
+            if (preg_match('/^\s*name\s*=\s*(.+)$/m', $content, $m)) {
+                $defaultName = trim($m[1]);
+            }
+            if (preg_match('/^\s*email\s*=\s*(.+)$/m', $content, $m)) {
+                $defaultEmail = trim($m[1]);
+            }
+        }
+
+        // Si no se encuentra en el repo local, chequear .gitconfig del usuario si existe
+        if ($defaultName === 'Developer' || $defaultEmail === 'dev@local') {
+            $userProfile = getenv('USERPROFILE') ?: getenv('HOME');
+            if ($userProfile) {
+                $globalGit = $userProfile . DIRECTORY_SEPARATOR . '.gitconfig';
+                if (file_exists($globalGit)) {
+                    $content = (string) file_get_contents($globalGit);
+                    if (preg_match('/^\s*name\s*=\s*(.+)$/m', $content, $m)) {
+                        $defaultName = trim($m[1]);
+                    }
+                    if (preg_match('/^\s*email\s*=\s*(.+)$/m', $content, $m)) {
+                        $defaultEmail = trim($m[1]);
+                    }
+                }
+            }
+        }
+
+        return [
+            'name' => $defaultName,
+            'email' => $defaultEmail,
+            'signature' => "{$defaultName} <{$defaultEmail}>",
+        ];
     }
 }
 

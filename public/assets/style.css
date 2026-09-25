@@ -651,6 +651,155 @@ body {
     color: var(--state-danger-text);
 }
 
+/* Selector de Modo de Vista (Historial Tabla vs Lienzo) */
+.view-mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    background: var(--bg-subtle);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+    gap: 2px;
+}
+
+.view-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+    transition: all 0.12s ease;
+}
+
+.view-btn:hover {
+    color: var(--text-primary);
+}
+
+.view-btn.active {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+    font-weight: 600;
+}
+
+/* Botón de Perfil de Desarrollador */
+.dev-profile-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 8px 0 4px;
+}
+
+.dev-avatar-circle {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--brand-blue);
+    color: #ffffff;
+    font-size: 10px;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+}
+
+/* Vista Estructurada: Tabla Cronológica de Migraciones */
+.timeline-table-view {
+    padding: 24px 32px;
+    max-width: 1200px;
+    margin: 0 auto;
+    width: 100%;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.timeline-table-header {
+    margin-bottom: 16px;
+}
+
+.timeline-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.table-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+}
+
+.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    text-align: left;
+}
+
+.data-table th {
+    background: var(--bg-subtle);
+    padding: 10px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.data-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-subtle);
+    vertical-align: middle;
+}
+
+.data-table tr {
+    cursor: pointer;
+    transition: background 0.1s ease;
+}
+
+.data-table tbody tr:hover {
+    background: var(--bg-hover);
+}
+
+.data-table tr.row-drift {
+    background: var(--state-danger-bg);
+}
+
+.data-table tr.row-drift:hover {
+    background: rgba(239, 68, 68, 0.18);
+}
+
+.data-table tr.row-pending {
+    background: var(--state-warn-bg);
+}
+
+.data-table tr.row-pending:hover {
+    background: rgba(245, 158, 11, 0.18);
+}
+
+.btn-sm {
+    height: 22px;
+    padding: 0 6px;
+    font-size: 11px;
+}
+
+.btn-danger {
+    background: var(--state-danger-bg);
+    color: var(--state-danger-text);
+    border-color: var(--state-danger-border);
+}
+
 /* Modales */
 .modal-layer {
     position: fixed;
@@ -883,6 +1032,27 @@ input:focus {
 
     .flow-node {
         width: 270px;
+    }
+
+    .timeline-table-view {
+        padding: 14px 12px;
+    }
+
+    .dev-profile-btn span {
+        display: none !important;
+    }
+
+    .dev-profile-btn {
+        padding: 0 4px !important;
+    }
+
+    .data-table th:nth-child(3),
+    .data-table td:nth-child(3),
+    .data-table th:nth-child(5),
+    .data-table td:nth-child(5),
+    .data-table th:nth-child(6),
+    .data-table td:nth-child(6) {
+        display: none;
     }
 }
 

@@ -5,6 +5,7 @@
 
 document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
+    initProfileAndSession();
     initDraggableNodes();
     updateConnectionWires();
     initLazyStatusChecker();
@@ -460,3 +461,136 @@ window.addEventListener('resize', () => {
     }
     updateConnectionWires();
 });
+
+
+// 6. View Mode Switching (Timeline Table vs Flow Canvas)
+function switchViewMode(mode) {
+    const tableView = document.getElementById('timelineTableView');
+    const flowView = document.getElementById('flowViewport');
+    const btnTable = document.getElementById('viewBtnTable');
+    const btnCanvas = document.getElementById('viewBtnCanvas');
+
+    if (mode === 'canvas') {
+        if (tableView) tableView.style.display = 'none';
+        if (flowView) flowView.style.display = 'block';
+        if (btnCanvas) btnCanvas.classList.add('active');
+        if (btnTable) btnTable.classList.remove('active');
+        localStorage.setItem('syncdero-view-mode', 'canvas');
+        setTimeout(updateConnectionWires, 50);
+    } else {
+        if (flowView) flowView.style.display = 'none';
+        if (tableView) tableView.style.display = 'block';
+        if (btnTable) btnTable.classList.add('active');
+        if (btnCanvas) btnCanvas.classList.remove('active');
+        localStorage.setItem('syncdero-view-mode', 'table');
+    }
+}
+
+function initViewMode() {
+    const savedMode = localStorage.getItem('syncdero-view-mode') || 'table';
+    switchViewMode(savedMode);
+}
+
+
+// 7. Developer Profile & Session Credentials Management
+function initProfileAndSession() {
+    initViewMode();
+
+    // Cargar perfil guardado de sessionStorage si existe
+    const savedName = sessionStorage.getItem('syncdero-dev-name');
+    const savedEmail = sessionStorage.getItem('syncdero-dev-email');
+    const savedPassword = sessionStorage.getItem('syncdero-dev-password');
+
+    if (savedName) {
+        const topName = document.getElementById('topbarDevName');
+        const topAvatar = document.getElementById('topbarAvatarLetter');
+        const inputName = document.getElementById('devProfileName');
+        const hiddenName = document.getElementById('syncInputAuthorName');
+
+        if (topName) topName.textContent = savedName;
+        if (topAvatar) topAvatar.textContent = savedName.charAt(0).toUpperCase();
+        if (inputName) inputName.value = savedName;
+        if (hiddenName) hiddenName.value = savedName;
+    }
+
+    if (savedEmail) {
+        const inputEmail = document.getElementById('devProfileEmail');
+        const hiddenEmail = document.getElementById('syncInputAuthorEmail');
+        if (inputEmail) inputEmail.value = savedEmail;
+        if (hiddenEmail) hiddenEmail.value = savedEmail;
+    }
+
+    if (savedPassword) {
+        const inputPass = document.getElementById('devProfilePassword');
+        if (inputPass) inputPass.value = savedPassword;
+
+        // Auto-rellenar contraseña en el modal de Sync si está protegido
+        const syncPass = document.querySelector('#syncModal input[type="password"]');
+        if (syncPass) syncPass.value = savedPassword;
+    }
+
+    updateProfileSignaturePreview();
+}
+
+function updateProfileSignaturePreview() {
+    const inputName = document.getElementById('devProfileName');
+    const inputEmail = document.getElementById('devProfileEmail');
+    const preview = document.getElementById('devProfileSignaturePreview');
+    const syncPreview = document.getElementById('syncModalAuthorPreview');
+
+    const name = inputName ? inputName.value.trim() : '';
+    const email = inputEmail ? inputEmail.value.trim() : '';
+    const sig = name ? (email ? `${name} <${email}>` : name) : 'Developer';
+
+    if (preview) preview.textContent = sig;
+    if (syncPreview) syncPreview.textContent = sig;
+}
+
+function openProfileModal() {
+    const modal = document.getElementById('profileModal');
+    if (modal) {
+        updateProfileSignaturePreview();
+        modal.classList.add('open');
+    }
+}
+
+function closeProfileModal() {
+    const modal = document.getElementById('profileModal');
+    if (modal) modal.classList.remove('open');
+}
+
+function saveDeveloperProfile() {
+    const inputName = document.getElementById('devProfileName');
+    const inputEmail = document.getElementById('devProfileEmail');
+    const inputPass = document.getElementById('devProfilePassword');
+
+    const name = inputName ? inputName.value.trim() : '';
+    const email = inputEmail ? inputEmail.value.trim() : '';
+    const pass = inputPass ? inputPass.value : '';
+
+    if (name) {
+        sessionStorage.setItem('syncdero-dev-name', name);
+        const topName = document.getElementById('topbarDevName');
+        const topAvatar = document.getElementById('topbarAvatarLetter');
+        const hiddenName = document.getElementById('syncInputAuthorName');
+
+        if (topName) topName.textContent = name;
+        if (topAvatar) topAvatar.textContent = name.charAt(0).toUpperCase();
+        if (hiddenName) hiddenName.value = name;
+    }
+
+    if (email) {
+        sessionStorage.setItem('syncdero-dev-email', email);
+        const hiddenEmail = document.getElementById('syncInputAuthorEmail');
+        if (hiddenEmail) hiddenEmail.value = email;
+    }
+
+    if (pass !== '') {
+        sessionStorage.setItem('syncdero-dev-password', pass);
+        const syncPass = document.querySelector('#syncModal input[type="password"]');
+        if (syncPass) syncPass.value = pass;
+    }
+
+    closeProfileModal();
+}
+
