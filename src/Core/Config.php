@@ -15,6 +15,43 @@ class Config
         $this->data = $data;
     }
 
+    public static function loadEnv(string $envPath): void
+    {
+        if (!file_exists($envPath) || !is_readable($envPath)) {
+            return;
+        }
+
+        $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        if ($lines === false) {
+            return;
+        }
+
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if ($line === '' || str_starts_with($line, '#')) {
+                continue;
+            }
+
+            if (strpos($line, '=') === false) {
+                continue;
+            }
+
+            [$key, $value] = explode('=', $line, 2);
+            $key = trim($key);
+            $value = trim($value);
+
+            if (preg_match('/^"(.*)"$/', $value, $m) || preg_match("/^'(.*)'$/", $value, $m)) {
+                $value = $m[1];
+            }
+
+            if (getenv($key) === false) {
+                putenv("{$key}={$value}");
+                $_ENV[$key] = $value;
+                $_SERVER[$key] = $value;
+            }
+        }
+    }
+
     public static function load(string $configPath): self
     {
         if (!file_exists($configPath)) {
@@ -94,6 +131,25 @@ class Config
     public function getApplyPassword(): string
     {
         return $this->data['apply_password'] ?? '';
+    }
+
+    public function isTeamMode(): bool
+    {
+        $envVal = getenv('SYNCDERO_TEAM_MODE');
+        if ($envVal !== false) {
+            return filter_var($envVal, FILTER_VALIDATE_BOOLEAN);
+        }
+        return (bool)($this->data['team_mode'] ?? false);
+    }
+
+    public function getReferenceEnv(): string
+    {
+        return getenv('SYNCDERO_REFERENCE_ENV') ?: ($this->data['reference_env'] ?? 'pg_main');
+    }
+
+    public function getAppKey(): string
+    {
+        return getenv('SYNCDERO_APP_KEY') ?: ($this->data['app_key'] ?? '32_caracteres_aleatorios_clave!!');
     }
 
     public function saveServer(string $serverKey, array $serverConfig, string $savePath): void

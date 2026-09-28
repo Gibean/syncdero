@@ -454,5 +454,59 @@ class StateEngine
             'signature' => "{$defaultName} <{$defaultEmail}>",
         ];
     }
+
+    /**
+     * Compara dos entornos (ej: BD Principal como origen y espejo local del dev como destino)
+     * e identifica qué migraciones aplicadas en el origen faltan o divergen en el destino.
+     *
+     * @return array{
+     *   source_count: int,
+     *   target_count: int,
+     *   missing_in_target: array<int, array>,
+     *   divergent: array<int, array>,
+     *   is_in_sync: bool
+     * }
+     */
+    public function compareMirrors(DriverInterface $sourceDriver, DriverInterface $targetDriver): array
+    {
+        $sourceApplied = $sourceDriver->getAppliedMigrations();
+        $targetApplied = $targetDriver->getAppliedMigrations();
+
+        $sourceMap = [];
+        foreach ($sourceApplied as $k => $row) {
+            $name = (string)($row['name'] ?? ($row['migration'] ?? $k));
+            $sourceMap[$name] = $row;
+        }
+
+        $targetMap = [];
+        foreach ($targetApplied as $k => $row) {
+            $name = (string)($row['name'] ?? ($row['migration'] ?? $k));
+            $targetMap[$name] = $row;
+        }
+
+        $missingInTarget = [];
+        $divergent = [];
+
+        foreach ($sourceMap as $migration => $sourceRow) {
+            if (!isset($targetMap[$migration])) {
+                $missingInTarget[] = array_merge($sourceRow, ['name' => $migration, 'migration' => $migration]);
+            } elseif ($sourceRow['hash'] !== $targetMap[$migration]['hash']) {
+                $divergent[] = [
+                    'migration' => $migration,
+                    'name' => $migration,
+                    'source_hash' => $sourceRow['hash'],
+                    'target_hash' => $targetMap[$migration]['hash'],
+                ];
+            }
+        }
+
+        return [
+            'source_count' => count($sourceApplied),
+            'target_count' => count($targetApplied),
+            'missing_in_target' => $missingInTarget,
+            'divergent' => $divergent,
+            'is_in_sync' => empty($missingInTarget) && empty($divergent),
+        ];
+    }
 }
 

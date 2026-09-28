@@ -1,9 +1,9 @@
-# Entornos locales y credenciales sensibles
+# Entorno local y credenciales sensibles (único .env local, jamás versionar)
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 config/syncdero.php
-config/syncdero.local.php
+config/users.php
 config/*.local.php
 docker-compose.override.yml
 

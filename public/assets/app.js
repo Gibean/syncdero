@@ -148,15 +148,24 @@ function updateConnectionWires() {
     svg.innerHTML = pathsHtml;
 }
 
-// Modales
+// Modales con animación fluida de transitions.dev
+function smoothCloseModal(modalId) {
+    const modal = typeof modalId === 'string' ? document.getElementById(modalId) : modalId;
+    if (!modal || (!modal.classList.contains('open') && !modal.classList.contains('is-closing'))) return;
+    modal.classList.add('is-closing');
+    modal.classList.remove('open');
+    setTimeout(() => {
+        modal.classList.remove('is-closing');
+    }, 160);
+}
+
 function openSyncModal() {
     const modal = document.getElementById('syncModal');
     if (modal) modal.classList.add('open');
 }
 
 function closeSyncModal() {
-    const modal = document.getElementById('syncModal');
-    if (modal) modal.classList.remove('open');
+    smoothCloseModal('syncModal');
 }
 
 function openServerModal() {
@@ -165,8 +174,7 @@ function openServerModal() {
 }
 
 function closeServerModal() {
-    const modal = document.getElementById('serverModal');
-    if (modal) modal.classList.remove('open');
+    smoothCloseModal('serverModal');
 }
 
 function openRollbackModal() {
@@ -175,8 +183,7 @@ function openRollbackModal() {
 }
 
 function closeRollbackModal() {
-    const modal = document.getElementById('rollbackModal');
-    if (modal) modal.classList.remove('open');
+    smoothCloseModal('rollbackModal');
 }
 
 function openHelpModal() {
@@ -200,8 +207,7 @@ function openHelpModal() {
 }
 
 function closeHelpModal() {
-    const modal = document.getElementById('helpModal');
-    if (modal) modal.classList.remove('open');
+    smoothCloseModal('helpModal');
 }
 
 function openDiffModal(filename) {
@@ -300,8 +306,7 @@ function openDiffModal(filename) {
 }
 
 function closeDiffModal() {
-    const modal = document.getElementById('diffModal');
-    if (modal) modal.classList.remove('open');
+    smoothCloseModal('diffModal');
 }
 
 function escapeHtml(text) {
@@ -555,8 +560,7 @@ function openProfileModal() {
 }
 
 function closeProfileModal() {
-    const modal = document.getElementById('profileModal');
-    if (modal) modal.classList.remove('open');
+    smoothCloseModal('profileModal');
 }
 
 function saveDeveloperProfile() {
@@ -593,4 +597,20 @@ function saveDeveloperProfile() {
 
     closeProfileModal();
 }
+
+// Interacciones y atajos globales inspirados en transitions-dev y minimalist-ui
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const openModal = document.querySelector('.modal-layer.open');
+        if (openModal) {
+            smoothCloseModal(openModal);
+        }
+    }
+});
+
+document.addEventListener('click', (e) => {
+    if (e.target && e.target.classList.contains('modal-layer') && e.target.classList.contains('open')) {
+        smoothCloseModal(e.target);
+    }
+});
 

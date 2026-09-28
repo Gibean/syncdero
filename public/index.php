@@ -19,9 +19,15 @@ foreach ($autoloadPaths as $path) {
     }
 }
 
+use Illuminate\Http\Request;
+use Syncdero\Auth\AuthManager;
 use Syncdero\Core\Config;
 use Syncdero\Core\StateEngine;
 use Syncdero\Drivers\DriverFactory;
+
+$request = Request::capture();
+
+Config::loadEnv(__DIR__ . '/../.env');
 
 $configPath = getenv('SYNCDERO_CONFIG') ?: (__DIR__ . '/../config/syncdero.php');
 if (!file_exists($configPath)) {
@@ -29,21 +35,72 @@ if (!file_exists($configPath)) {
 }
 
 $config = Config::load($configPath);
+$authManager = new AuthManager($config);
+
+// Manejo de Logout
+if ($request->query('action') === 'logout') {
+    $authManager->logout();
+    header('Location: /');
+    exit;
+}
+
+// En Modo Equipo, exigir autenticación perimetral
+if ($authManager->isTeamMode() && !$authManager->isAuthenticated()) {
+    $loginError = null;
+    if ($request->isMethod('POST') && $request->input('action') === 'login') {
+        $username = trim((string)$request->input('username'));
+        $password = (string)$request->input('password');
+        if ($authManager->login($username, $password)) {
+            header('Location: /');
+            exit;
+        } else {
+            $loginError = 'Credenciales no válidas. Verifique usuario y contraseña.';
+        }
+    }
+    require __DIR__ . '/login.php';
+    exit;
+}
+
+$currentUser = $authManager->getCurrentUser();
+$csrfToken = $authManager->getCsrfToken();
+
 $stateEngine = new StateEngine($config->getMigrationsDir(), $config->getRepoDir());
 $gitInfo = $stateEngine->getGitInfo();
 $gitAuthor = $stateEngine->getGitAuthor();
-$environments = $config->getEnvironments();
+
+// Filtrado de entornos según rol del usuario (Admin ve todo, Developer ve su espejo + BD Principal)
+$allEnvironments = $config->getEnvironments();
+$environments = $authManager->filterEnvironments($allEnvironments);
 
 // Entorno seleccionado
-$selectedEnvKey = $_GET['env'] ?? array_key_first($environments) ?? '';
+$selectedEnvKey = (string)($request->query('env') ?: (array_key_first($environments) ?? ''));
+if ($selectedEnvKey !== '' && !isset($environments[$selectedEnvKey])) {
+    $selectedEnvKey = (string)(array_key_first($environments) ?? '');
+}
 $selectedEnv = $environments[$selectedEnvKey] ?? null;
 
-// Manejo de Acciones POST (Sync, Backup)
-$action = $_POST['action'] ?? null;
+// Manejo de Acciones POST
+$action = (string)$request->input('action');
 $message = null;
 $messageType = null;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
+if ($request->isMethod('POST')) {
+    $submittedCsrf = (string)$request->input('_csrf');
+    if (!$authManager->validateCsrfToken($submittedCsrf)) {
+        $message = 'Error de seguridad: Token CSRF no válido o sesión expirada.';
+        $messageType = 'danger';
+        $action = ''; // Cancelar acción si CSRF falla
+    }
+}
+
+if ($request->isMethod('POST') && $selectedEnv && $action !== '') {
+    // Restricción de mutación según rol de usuario
+    if (in_array($action, ['sync', 'rollback', 'restore', 'sync_from_mirror'], true) && !$currentUser->canMutateEnvironment($selectedEnvKey)) {
+        $message = 'Acción bloqueada: Como desarrollador sólo tienes autorización para sincronizar o revertir tu propio espejo asignado.';
+        $messageType = 'danger';
+        $action = '';
+    }
+
     $driver = DriverFactory::create($selectedEnv);
 
     if ($action === 'sync') {
@@ -147,6 +204,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $selectedEnv) {
                 }
             } catch (\Throwable $e) {
                 $message = 'Error al restaurar: ' . $e->getMessage();
+                $messageType = 'danger';
+            }
+        }
+    } elseif ($action === 'sync_from_mirror') {
+        $refEnvKey = $config->getReferenceEnv();
+        $refEnvConfig = $allEnvironments[$refEnvKey] ?? null;
+        if (!$refEnvConfig) {
+            $message = "No se encontró el entorno de referencia principal ({$refEnvKey}).";
+            $messageType = 'danger';
+        } else {
+            try {
+                $refDriver = DriverFactory::create($refEnvConfig);
+                $comp = $stateEngine->compareMirrors($refDriver, $driver);
+                if (empty($comp['missing_in_target'])) {
+                    $message = 'Tu espejo ya se encuentra 100% al día con la Base de Datos Principal.';
+                    $messageType = 'info';
+                } else {
+                    $driver->createBackup($config->getBackupDir());
+                    $appliedBy = $currentUser->getSignature() ?: ($gitAuthor['signature'] ?? 'developer');
+                    $notes = "Nivelación dinámica desde {$refEnvKey}";
+                    $migrationFiles = $stateEngine->getMigrationFiles();
+                    $toApply = [];
+                    foreach ($comp['missing_in_target'] as $missingRow) {
+                        $mName = $missingRow['migration'];
+                        if (isset($migrationFiles[$mName])) {
+                            $toApply[] = $migrationFiles[$mName];
+                        }
+                    }
+                    if (empty($toApply)) {
+                        $message = 'No se encontraron en disco los archivos para las migraciones faltantes en tu espejo.';
+                        $messageType = 'danger';
+                    } else {
+                        $syncRes = $stateEngine->syncPending($driver, $toApply, $appliedBy, $notes);
+                        if ($syncRes['success']) {
+                            $message = "¡Espejo nivelado exitosamente! Se aplicaron {$syncRes['applied_count']} migración(es) desde la BD Principal.";
+                            $messageType = 'success';
+                        } else {
+                            $message = 'Error nivelando espejo: ' . json_encode($syncRes['errors']);
+                            $messageType = 'danger';
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                $message = 'Error al nivelar espejo desde Principal: ' . $e->getMessage();
                 $messageType = 'danger';
             }
         }
@@ -510,6 +611,16 @@ $envBackups = $selectedEnv
             <path d="M18 6 6 18"></path>
             <path d="m6 6 12 12"></path>
         </symbol>
+        <symbol id="icon-log-out" viewBox="0 0 24 24">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+        </symbol>
+        <symbol id="icon-refresh-cw" viewBox="0 0 24 24">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+        </symbol>
     </svg>
 
     <!-- Barra de Navegación Superior -->
@@ -576,7 +687,18 @@ $envBackups = $selectedEnv
                 <svg class="icon"><use href="#icon-database"></use></svg>
                 <span>Servidores</span>
             </button>
+            <?php if (!empty($selectedEnv['is_my_mirror'])): ?>
+                <form method="POST" style="display:inline;" onsubmit="return confirm('¿Deseas nivelar tu espejo aplicando las migraciones pendientes desde la BD Principal?');">
+                    <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="action" value="sync_from_mirror">
+                    <button type="submit" class="btn" style="border-color: #3b82f6; color: #3b82f6;" title="Nivelar mi contenedor/espejo desde la BD Principal">
+                        <svg class="icon"><use href="#icon-refresh-cw"></use></svg>
+                        <span>Nivelar Espejo</span>
+                    </button>
+                </form>
+            <?php endif; ?>
             <form method="POST" style="display:inline;">
+                <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
                 <input type="hidden" name="action" value="backup">
                 <button type="submit" class="btn" title="Generar Snapshot manual">
                     <svg class="icon"><use href="#icon-save"></use></svg>
@@ -587,6 +709,11 @@ $envBackups = $selectedEnv
                 <svg class="icon"><use href="#icon-undo"></use></svg>
                 <span>Rollback</span>
             </button>
+            <?php if ($authManager->isTeamMode()): ?>
+                <a href="?action=logout" class="btn btn-icon" title="Cerrar Sesión (<?= htmlspecialchars($currentUser->username) ?>)">
+                    <svg class="icon"><use href="#icon-log-out"></use></svg>
+                </a>
+            <?php endif; ?>
 
             <button type="button" class="btn btn-primary" onclick="openSyncModal()" <?= (empty($pendingList) || !empty($divergentList)) ? 'disabled' : '' ?>>
                 <svg class="icon" style="stroke: #ffffff;"><use href="#icon-play"></use></svg>
@@ -953,6 +1080,7 @@ $envBackups = $selectedEnv
                 <?php else: ?>
                     <?php foreach ($envBackups as $bk): ?>
                         <form method="POST" style="display:flex; flex-direction:column; gap:4px; padding:6px 8px; border:1px solid var(--border-color); border-radius:4px; margin-bottom:6px;">
+                            <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
                             <input type="hidden" name="action" value="restore">
                             <input type="hidden" name="backup_file" value="<?= htmlspecialchars($bk['name']) ?>">
                             <div style="font-family: var(--font-mono); font-size:10px; color: var(--text-primary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?= htmlspecialchars($bk['name']) ?>">
@@ -1001,6 +1129,7 @@ $envBackups = $selectedEnv
             </div>
             <form method="POST">
                 <div class="modal-content">
+                    <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
                     <input type="hidden" name="action" value="sync">
                     
                     <!-- Imagotipo en Ventana de Autorización / Confirmación -->
@@ -1080,6 +1209,7 @@ $envBackups = $selectedEnv
                     <?php else: ?>
                         <?php foreach ($allServers as $sKey => $sCfg): ?>
                             <form method="POST" style="display:inline-flex; align-items:center; background:var(--bg-surface); padding:3px 8px; border:1px solid var(--border-color); border-radius:3px;">
+                                <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
                                 <input type="hidden" name="action" value="delete_server">
                                 <input type="hidden" name="server_key" value="<?= htmlspecialchars($sKey) ?>">
                                 <span style="font-weight:600; font-size:11px; margin-right:6px;"><?= htmlspecialchars($sCfg['label'] ?? $sKey) ?></span>
@@ -1093,6 +1223,7 @@ $envBackups = $selectedEnv
 
             <form method="POST">
                 <div class="modal-content">
+                    <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
                     <input type="hidden" name="action" value="save_server">
                     <div style="font-weight: 600; font-size: 12px; margin-bottom: 10px;">
                         Nueva Conexión de Servidor
@@ -1201,6 +1332,7 @@ $envBackups = $selectedEnv
             </div>
             <form method="POST">
                 <div class="modal-content">
+                    <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
                     <input type="hidden" name="action" value="rollback">
                     
                     <img src="/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO" class="modal-watermark-logo logo-light">

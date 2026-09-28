@@ -800,19 +800,27 @@ body {
     border-color: var(--state-danger-border);
 }
 
-/* Modales */
+/* Modales con Motion Tokens de transitions.dev */
 .modal-layer {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(2px);
-    display: none;
+    background: rgba(10, 15, 29, 0.45);
+    backdrop-filter: blur(4px);
+    display: flex;
     place-items: center;
+    justify-content: center;
     z-index: 100;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity var(--modal-open-dur, 220ms) cubic-bezier(0.22, 1, 0.36, 1),
+                visibility var(--modal-open-dur, 220ms);
 }
 
 .modal-layer.open {
-    display: grid;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
 }
 
 .modal-window {
@@ -821,8 +829,31 @@ body {
     background: var(--bg-surface);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    box-shadow: var(--shadow-modal);
+    box-shadow: 0 20px 40px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border-color);
     overflow: hidden;
+    transform: scale(0.96) translateY(6px);
+    opacity: 0;
+    transition: transform var(--modal-open-dur, 240ms) cubic-bezier(0.22, 1, 0.36, 1),
+                opacity var(--modal-open-dur, 240ms) cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform, opacity;
+}
+
+.modal-layer.open .modal-window {
+    transform: scale(1) translateY(0);
+    opacity: 1;
+}
+
+.modal-layer.is-closing {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--modal-close-dur, 160ms) ease-out;
+}
+
+.modal-layer.is-closing .modal-window {
+    transform: scale(0.96) translateY(4px);
+    opacity: 0;
+    transition: transform var(--modal-close-dur, 160ms) ease-out,
+                opacity var(--modal-close-dur, 160ms) ease-out;
 }
 
 .modal-title-bar {
@@ -1053,6 +1084,16 @@ input:focus {
     .data-table th:nth-child(6),
     .data-table td:nth-child(6) {
         display: none;
+    }
+}
+
+/* Guard de accesibilidad de transitions.dev */
+@media (prefers-reduced-motion: reduce) {
+    *, ::before, ::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
 }
 

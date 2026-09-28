@@ -29,6 +29,8 @@ use Syncdero\Core\Config;
 use Syncdero\Core\StateEngine;
 use Syncdero\Drivers\DriverFactory;
 
+Config::loadEnv(__DIR__ . '/../.env');
+
 $configPath = getenv('SYNCDERO_CONFIG') ?: (__DIR__ . '/../config/syncdero.php');
 if (!file_exists($configPath)) {
     // Si no existe, revisar en public/config.php legacy
