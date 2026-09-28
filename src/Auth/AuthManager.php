@@ -84,20 +84,27 @@ class AuthManager
 
     public function getCurrentUser(): User
     {
-        // En Modo Standalone (desarrollador individual), el usuario siempre es Admin local de fricción cero
+        if ($this->currentUser !== null) {
+            return $this->currentUser;
+        }
+
+        // Si se seleccionó "Ver como..." (simulación de desarrollador), reflejarlo de inmediato
+        $impersonated = $_SESSION['syncdero_impersonated_user'] ?? null;
+        if ($impersonated && isset($this->users[$impersonated])) {
+            $this->currentUser = $this->users[$impersonated];
+            return $this->currentUser;
+        }
+
+        // En Modo Standalone (desarrollador individual), el usuario por defecto es Admin de fricción cero
         if (!$this->isTeamMode()) {
             return new User(
-                id: 'local_dev',
-                username: 'standalone_dev',
-                name: 'Desarrollador Individual',
-                email: '',
+                id: 'local_admin',
+                username: 'admin',
+                name: 'Administrador SYNCDERO',
+                email: 'admin@agarcorp.com',
                 role: 'admin',
                 assignedEnv: null
             );
-        }
-
-        if ($this->currentUser !== null) {
-            return $this->currentUser;
         }
 
         $sessionUser = $_SESSION['syncdero_user'] ?? null;
@@ -145,8 +152,40 @@ class AuthManager
 
     public function logout(): void
     {
-        unset($_SESSION['syncdero_user']);
+        unset($_SESSION['syncdero_user'], $_SESSION['syncdero_impersonated_user']);
         $this->currentUser = null;
+    }
+
+    public function switchUser(string $targetUsername): bool
+    {
+        if (isset($this->users[$targetUsername])) {
+            $_SESSION['syncdero_impersonated_user'] = $targetUsername;
+            $this->currentUser = $this->users[$targetUsername];
+            return true;
+        }
+        return false;
+    }
+
+    public function stopImpersonating(): void
+    {
+        unset($_SESSION['syncdero_impersonated_user']);
+        $this->currentUser = null;
+    }
+
+    public function isImpersonating(): bool
+    {
+        return !empty($_SESSION['syncdero_impersonated_user']);
+    }
+
+    public function getOriginalUser(): ?User
+    {
+        $orig = $_SESSION['syncdero_user'] ?? null;
+        return ($orig && isset($this->users[$orig])) ? $this->users[$orig] : null;
+    }
+
+    public function getUsers(): array
+    {
+        return $this->users;
     }
 
     public function getCsrfToken(): string
@@ -180,10 +219,11 @@ class AuthManager
                 // Marcar si es el espejo propio o el entorno de referencia
                 if ($key === $user->assignedEnv) {
                     $envConfig['is_my_mirror'] = true;
-                    $envConfig['label'] = '★ (Mi Espejo) ' . ($envConfig['label'] ?? $key);
+                    // Mantener label limpio sin emojis
+                    $envConfig['label'] = $envConfig['label'] ?? $key;
                 } elseif ($key === $referenceEnv) {
                     $envConfig['is_reference'] = true;
-                    $envConfig['label'] = '🌐 (Principal Master) ' . ($envConfig['label'] ?? $key);
+                    $envConfig['label'] = $envConfig['label'] ?? $key;
                     $envConfig['protected'] = true; // Proteger la principal para que el dev no haga mutaciones directas
                 }
                 $filtered[$key] = $envConfig;

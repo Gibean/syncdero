@@ -44,6 +44,22 @@ if ($request->query('action') === 'logout') {
     exit;
 }
 
+// Manejo de Impersonación (Cambio rápido de rol/usuario)
+if ($request->query('action') === 'switch_user') {
+    $target = (string)$request->query('user');
+    if ($authManager->getCurrentUser()->isAdmin() || $authManager->isImpersonating()) {
+        $authManager->switchUser($target);
+    }
+    header('Location: /');
+    exit;
+}
+
+if ($request->query('action') === 'stop_impersonating') {
+    $authManager->stopImpersonating();
+    header('Location: /');
+    exit;
+}
+
 // En Modo Equipo, exigir autenticación perimetral
 if ($authManager->isTeamMode() && !$authManager->isAuthenticated()) {
     $loginError = null;
@@ -64,11 +80,22 @@ if ($authManager->isTeamMode() && !$authManager->isAuthenticated()) {
 $currentUser = $authManager->getCurrentUser();
 $csrfToken = $authManager->getCsrfToken();
 
+// 1. Manejo del Proyecto Activo (Multi-Proyecto Open Source)
+$allProjects = $config->getProjects();
+$selectedProjectKey = (string)($request->query('project') ?: ($_SESSION['syncdero_active_project'] ?? array_key_first($allProjects) ?? 'default'));
+if (!isset($allProjects[$selectedProjectKey])) {
+    $selectedProjectKey = (string)(array_key_first($allProjects) ?? 'default');
+}
+$_SESSION['syncdero_active_project'] = $selectedProjectKey;
+$config->setActiveProjectKey($selectedProjectKey);
+$activeProject = $config->getActiveProject();
+
+// 2. Inicializar StateEngine con el directorio de migraciones y repo Git del proyecto activo
 $stateEngine = new StateEngine($config->getMigrationsDir(), $config->getRepoDir());
 $gitInfo = $stateEngine->getGitInfo();
 $gitAuthor = $stateEngine->getGitAuthor();
 
-// Filtrado de entornos según rol del usuario (Admin ve todo, Developer ve su espejo + BD Principal)
+// 3. Filtrado de entornos según rol del usuario para el proyecto activo
 $allEnvironments = $config->getEnvironments();
 $environments = $authManager->filterEnvironments($allEnvironments);
 
@@ -78,6 +105,7 @@ if ($selectedEnvKey !== '' && !isset($environments[$selectedEnvKey])) {
     $selectedEnvKey = (string)(array_key_first($environments) ?? '');
 }
 $selectedEnv = $environments[$selectedEnvKey] ?? null;
+$autoOpenSyncModal = (bool)$request->query('auto_sync');
 
 // Manejo de Acciones POST
 $action = (string)$request->input('action');
@@ -291,7 +319,8 @@ if ($request->isMethod('POST') && $selectedEnv && $action !== '') {
                     // Recargar entornos
                     $environments = $config->getEnvironments();
                 } else {
-                    $message = "No se pudo conectar al servidor con las credenciales proporcionadas.";
+                    $errDetail = method_exists($testDriver, 'getLastConnectionError') ? $testDriver->getLastConnectionError() : '';
+                    $message = "No se pudo conectar al servidor: " . ($errDetail ?: 'credenciales o host incorrectos.');
                     $messageType = 'danger';
                 }
             } catch (\Throwable $e) {
@@ -324,6 +353,17 @@ if ($request->isMethod('POST') && $selectedEnv && $action !== '') {
             }
         } catch (\Throwable $e) {
             $message = 'Error generando snapshot: ' . $e->getMessage();
+            $messageType = 'danger';
+        }
+    } elseif ($action === 'delete_backup') {
+        $backupName = basename(trim($_POST['backup_file'] ?? ''));
+        $targetFile = $config->getBackupDir() . DIRECTORY_SEPARATOR . $backupName;
+        if ($backupName !== '' && file_exists($targetFile)) {
+            @unlink($targetFile);
+            $message = "Snapshot '{$backupName}' eliminado correctamente.";
+            $messageType = 'info';
+        } else {
+            $message = 'No se pudo encontrar el snapshot a eliminar.';
             $messageType = 'danger';
         }
     }
@@ -451,15 +491,32 @@ if (isset($_GET['api_manual'])) {
     exit;
 }
 
+// Evaluación de modo: BD Única vs Ecosistema Multi-Entorno / Espejos
+$hasMultipleEnvs = $config->hasMultipleEnvironments();
+$hasMirrors = $config->hasMirrors();
+$referenceEnvKey = $config->getReferenceEnv();
+$environmentOwners = $config->getEnvironmentOwners();
+
+// Matriz General para la vista inicial del Administrador o pestaña "General"
+$mirrorsOverview = null;
+if ($hasMultipleEnvs) {
+    try {
+        $mirrorsOverview = $stateEngine->getMirrorsOverview($environments, $referenceEnvKey, $environmentOwners);
+    } catch (\Throwable) {
+        $mirrorsOverview = null;
+    }
+}
+
 // Resumen ligero de entornos para la barra lateral (Lazy / Sin bloquear la página)
 $sidebarSummary = [];
 foreach ($environments as $key => $envConfig) {
-    // Solo el entorno actualmente activo se inspecciona síncronamente, los demás cargan al instante
+    // Si ya tenemos datos de la matriz general, los reflejamos en el sidebar
+    $mState = $mirrorsOverview['environments'][$key] ?? null;
     $sidebarSummary[$key] = [
-        'status' => ($key === $selectedEnvKey) ? 'checking' : 'ready',
-        'pending' => 0,
-        'applied' => 0,
-        'total' => 0,
+        'status' => $mState ? $mState['status'] : (($key === $selectedEnvKey) ? 'checking' : 'ready'),
+        'pending' => $mState ? ($mState['status'] === 'ATRASADO' ? $mState['diff_count'] : 0) : 0,
+        'applied' => $mState ? $mState['applied'] : 0,
+        'total' => $mState ? $mState['total'] : 0,
     ];
 }
 
@@ -520,8 +577,8 @@ $envBackups = $selectedEnv
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SYNCDERO — Database Schema Version Flow</title>
     <link rel="icon" type="image/x-icon" href="/assets/logo/isotipo-modo-claro-oscuro.webp">
-    <link rel="stylesheet" href="/assets/icons.css">
-    <link rel="stylesheet" href="/assets/style.css">
+    <link rel="stylesheet" href="/assets/icons.css?v=<?= @filemtime(__DIR__ . '/assets/icons.css') ?: time() ?>">
+    <link rel="stylesheet" href="/assets/style.css?v=<?= @filemtime(__DIR__ . '/assets/style.css') ?: time() ?>">
 </head>
 <body>
 
@@ -621,6 +678,23 @@ $envBackups = $selectedEnv
             <polyline points="1 20 1 14 7 14"></polyline>
             <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
         </symbol>
+        <symbol id="icon-more-horizontal" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="1.5"></circle>
+            <circle cx="19" cy="12" r="1.5"></circle>
+            <circle cx="5" cy="12" r="1.5"></circle>
+        </symbol>
+        <symbol id="icon-folder" viewBox="0 0 24 24">
+            <path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.93a2 2 0 0 1-1.66-.9l-.82-1.2A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"></path>
+        </symbol>
+        <symbol id="icon-chevron-down" viewBox="0 0 24 24">
+            <polyline points="6 9 12 15 18 9"></polyline>
+        </symbol>
+        <symbol id="icon-grid" viewBox="0 0 24 24">
+            <rect width="7" height="7" x="3" y="3" rx="1"></rect>
+            <rect width="7" height="7" x="14" y="3" rx="1"></rect>
+            <rect width="7" height="7" x="14" y="14" rx="1"></rect>
+            <rect width="7" height="7" x="3" y="14" rx="1"></rect>
+        </symbol>
     </svg>
 
     <!-- Barra de Navegación Superior -->
@@ -639,7 +713,41 @@ $envBackups = $selectedEnv
                 <img src="/assets/logo/logo-texto-modo-oscuro.webp" alt="SYNCDERO" class="brand-texto-img logo-dark" style="display: none;">
             </a>
             <span class="breadcrumb-divider">/</span>
-            <div class="env-selector-pill" onclick="toggleMobileSidebar()">
+            <!-- Selector de Proyecto Activo (Open Source Multi-Proyecto) -->
+            <div class="project-selector-container">
+                <button type="button" class="project-selector-pill" onclick="toggleProjectDropdown(event)" title="Proyecto activo: <?= htmlspecialchars($activeProject['name'] ?? $selectedProjectKey) ?>">
+                    <svg class="icon" style="width:12px; height:12px; color: var(--brand-blue);"><use href="#icon-folder"></use></svg>
+                    <span><?= htmlspecialchars($activeProject['name'] ?? $selectedProjectKey) ?></span>
+                    <svg class="icon" style="width:10px; height:10px; opacity:0.6;"><use href="#icon-chevron-down"></use></svg>
+                </button>
+                <div class="project-dropdown-menu" id="projectDropdownMenu">
+                    <div style="padding: 6px 12px; font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
+                        Proyectos Configurados:
+                    </div>
+                    <?php foreach ($allProjects as $pKey => $pData): ?>
+                        <?php 
+                            $envCount = count($pData['environments'] ?? []);
+                            $srvCount = count($pData['servers'] ?? []);
+                            $descText = $srvCount > 0 ? "{$srvCount} servidor(es)" : "{$envCount} entorno(s)";
+                        ?>
+                        <a href="?project=<?= urlencode($pKey) ?>" class="project-item-link <?= $pKey === $selectedProjectKey ? 'active' : '' ?>">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <strong style="font-size:12px;"><?= htmlspecialchars($pData['name'] ?? $pKey) ?></strong>
+                                <?php if ($pKey === $selectedProjectKey): ?>
+                                    <span class="badge-role-pill dev" style="font-size:8px;">ACTIVO</span>
+                                <?php endif; ?>
+                            </div>
+                            <small style="font-family:var(--font-mono); font-size:10px; color:var(--text-muted); margin-top:2px;">
+                                <?= htmlspecialchars(basename($pData['repo_dir'] ?? './.git')) ?> · <?= $descText ?>
+                            </small>
+                        </a>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+
+            <span class="breadcrumb-divider">/</span>
+            <div class="env-selector-pill" onclick="toggleMobileSidebar()" title="Entorno Activo">
+                <span class="status-pulse-dot" title="Conexión Activa"></span>
                 <svg class="icon"><use href="#icon-database"></use></svg>
                 <span><?= htmlspecialchars($selectedEnv['label'] ?? $selectedEnvKey) ?></span>
             </div>
@@ -652,9 +760,15 @@ $envBackups = $selectedEnv
                 <span style="color: var(--text-muted);">(<?= htmlspecialchars($gitInfo['commit']) ?>)</span>
             </div>
 
-            <!-- Selector de Vista: Tabla / Línea de Tiempo vs Lienzo Visual -->
+            <!-- Selector de Vista: General (Matriz de Espejos) vs Tabla / Historial vs Lienzo Visual -->
             <div class="view-mode-toggle" id="viewModeToggle">
-                <button type="button" class="view-btn active" id="viewBtnTable" onclick="switchViewMode('table')" title="Vista Tabla / Historial Estructurado">
+                <?php if ($hasMultipleEnvs): ?>
+                    <button type="button" class="view-btn" id="viewBtnOverview" onclick="switchViewMode('overview')" title="Vista General: Matriz de Espejos y Estado de Entornos">
+                        <svg class="icon" style="width:13px; height:13px;"><use href="#icon-grid"></use></svg>
+                        <span>General</span>
+                    </button>
+                <?php endif; ?>
+                <button type="button" class="view-btn active" id="viewBtnTable" onclick="switchViewMode('table')" title="Vista Tabla / Historial Estructurado de la BD">
                     <svg class="icon" style="width:13px; height:13px;"><use href="#icon-table"></use></svg>
                     <span>Historial</span>
                 </button>
@@ -666,56 +780,160 @@ $envBackups = $selectedEnv
         </div>
 
         <div class="topbar-actions">
-            <!-- Perfil de Desarrollador Activo (Firma y Credenciales) -->
-            <button type="button" class="btn dev-profile-btn" onclick="openProfileModal()" title="Perfil del Desarrollador y Credenciales de Sesión">
-                <div class="dev-avatar-circle" id="topbarAvatarLetter">
-                    <?= strtoupper(substr($gitAuthor['name'] ?? 'D', 0, 1)) ?>
-                </div>
-                <span id="topbarDevName" style="max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                    <?= htmlspecialchars($gitAuthor['name'] ?? 'Developer') ?>
-                </span>
-            </button>
+            <!-- Menú de Usuario / Perfil / Impersonación -->
+            <div class="user-profile-menu-container" style="position: relative;">
+                <button type="button" class="btn dev-profile-btn" onclick="toggleUserDropdown(event)" title="Cuenta activa: <?= htmlspecialchars($currentUser->name) ?> (<?= htmlspecialchars($currentUser->role) ?>)">
+                    <div class="dev-avatar-circle" id="topbarAvatarLetter" style="background: <?= $currentUser->isAdmin() ? 'var(--brand-blue)' : '#059669' ?>;">
+                        <?= strtoupper(substr($currentUser->name ?: $currentUser->username, 0, 1)) ?>
+                    </div>
+                    <span id="topbarDevName" class="hide-on-laptop">
+                        <?= htmlspecialchars($currentUser->name ?: $currentUser->username) ?>
+                        <?php if ($authManager->isImpersonating()): ?>
+                            <small style="color: #f59e0b; font-weight:700;">(Simulando)</small>
+                        <?php endif; ?>
+                    </span>
+                    <svg class="icon" style="width:10px; height:10px; margin-left:2px; opacity:0.6;"><use href="#icon-more-horizontal"></use></svg>
+                </button>
 
-            <button type="button" class="btn btn-icon" onclick="openHelpModal()" title="Manual de Uso Técnico">
-                <svg class="icon"><use href="#icon-help"></use></svg>
-            </button>
+                <!-- Menú Desplegable de Usuario y Cambio Rápido de Rol -->
+                <div class="user-dropdown-menu" id="userDropdownMenu">
+                    <div style="padding: 8px 12px; border-bottom: 1px solid var(--border-color); font-size: 11px;">
+                        <div style="font-weight: 700; color: var(--text-primary);"><?= htmlspecialchars($currentUser->name ?: $currentUser->username) ?></div>
+                        <div style="color: var(--text-muted); font-size: 10px;">Rol: <strong><?= strtoupper($currentUser->role) ?></strong> · <?= htmlspecialchars($currentUser->email ?: 'Local') ?></div>
+                        <?php if ($currentUser->assignedEnv): ?>
+                            <div style="color: #10b981; font-size: 10px; margin-top:2px;">Espejo: <?= htmlspecialchars($currentUser->assignedEnv) ?></div>
+                        <?php endif; ?>
+                    </div>
+
+                    <?php if ($authManager->isImpersonating()): ?>
+                        <a href="?action=stop_impersonating" class="user-dropdown-item" style="color: #f59e0b; font-weight:600;">
+                            <svg class="icon"><use href="#icon-undo"></use></svg>
+                            <span>Volver a Administrador</span>
+                        </a>
+                    <?php endif; ?>
+
+                    <?php if ($currentUser->isAdmin() || $authManager->isImpersonating()): ?>
+                        <div style="padding: 6px 12px 2px; font-size: 10px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">
+                            Simular Vista de Desarrollador:
+                        </div>
+                        <?php foreach ($authManager->getUsers() as $uName => $uObj): ?>
+                            <?php if ($uName !== $currentUser->username): ?>
+                                <a href="?action=switch_user&user=<?= urlencode($uName) ?>" class="user-dropdown-item">
+                                    <span class="user-dot" style="width:6px; height:6px; border-radius:50%; background: <?= $uObj->isAdmin() ? '#3b82f6' : '#10b981' ?>;"></span>
+                                    <span><?= htmlspecialchars($uObj->name) ?></span>
+                                    <small style="margin-left:auto; color:var(--text-muted); font-size:9px;"><?= $uObj->role ?></small>
+                                </a>
+                            <?php endif; ?>
+                        <?php endforeach; ?>
+                        <div style="height:1px; background:var(--border-color); margin: 4px 0;"></div>
+                    <?php endif; ?>
+
+                    <button type="button" class="user-dropdown-item" onclick="openProfileModal(); closeUserDropdown();">
+                        <svg class="icon"><use href="#icon-user"></use></svg>
+                        <span>Credenciales de Sesión</span>
+                    </button>
+
+                    <?php if ($authManager->isTeamMode()): ?>
+                        <a href="?action=logout" class="user-dropdown-item text-danger">
+                            <svg class="icon"><use href="#icon-log-out"></use></svg>
+                            <span>Cerrar Sesión</span>
+                        </a>
+                    <?php endif; ?>
+                </div>
+            </div>
+
+            <!-- Acciones Secundarias (visibles en pantallas amplias, dentro de menú en medianas/pequeñas) -->
+            <div class="topbar-actions-secondary">
+                <button type="button" class="btn btn-icon" onclick="openHelpModal()" title="Manual de Uso Técnico">
+                    <svg class="icon"><use href="#icon-help"></use></svg>
+                </button>
+                <button type="button" class="btn btn-action-text" onclick="openServerModal()" title="Configurar Servidores y Motores (Estilo HeidiSQL)">
+                    <svg class="icon"><use href="#icon-database"></use></svg>
+                    <span>Servidores</span>
+                </button>
+                <?php if (!empty($selectedEnv['is_my_mirror'])): ?>
+                    <form method="POST" style="display:inline;" onsubmit="return confirm('¿Deseas nivelar tu espejo aplicando las migraciones pendientes desde la BD Principal?');">
+                        <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
+                        <input type="hidden" name="action" value="sync_from_mirror">
+                        <button type="submit" class="btn btn-action-text" style="border-color: #3b82f6; color: #3b82f6;" title="Nivelar mi contenedor/espejo desde la BD Principal">
+                            <svg class="icon"><use href="#icon-refresh-cw"></use></svg>
+                            <span>Nivelar Espejo</span>
+                        </button>
+                    </form>
+                <?php endif; ?>
+                <form method="POST" style="display:inline;">
+                    <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="action" value="backup">
+                    <button type="submit" class="btn btn-action-text" title="Generar Snapshot manual">
+                        <svg class="icon"><use href="#icon-save"></use></svg>
+                        <span>Snapshot</span>
+                    </button>
+                </form>
+                <button type="button" class="btn btn-action-text" onclick="openRollbackModal()" title="Revertir el último lote de migraciones aplicado" <?= empty($lastBatchMigrations) ? 'disabled' : '' ?>>
+                    <svg class="icon"><use href="#icon-undo"></use></svg>
+                    <span>Rollback</span>
+                </button>
+            </div>
+
+            <!-- Botón de Modo Oscuro / Claro (siempre visible como icono) -->
             <button id="themeToggleBtn" class="btn btn-icon" title="Alternar Modo Oscuro / Claro">
                 <svg id="iconMoon" class="icon"><use href="#icon-moon"></use></svg>
                 <svg id="iconSun" class="icon" style="display:none;"><use href="#icon-sun"></use></svg>
             </button>
-            <button type="button" class="btn" onclick="openServerModal()" title="Configurar Servidores y Motores (Estilo HeidiSQL)">
-                <svg class="icon"><use href="#icon-database"></use></svg>
-                <span>Servidores</span>
-            </button>
-            <?php if (!empty($selectedEnv['is_my_mirror'])): ?>
-                <form method="POST" style="display:inline;" onsubmit="return confirm('¿Deseas nivelar tu espejo aplicando las migraciones pendientes desde la BD Principal?');">
-                    <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
-                    <input type="hidden" name="action" value="sync_from_mirror">
-                    <button type="submit" class="btn" style="border-color: #3b82f6; color: #3b82f6;" title="Nivelar mi contenedor/espejo desde la BD Principal">
-                        <svg class="icon"><use href="#icon-refresh-cw"></use></svg>
-                        <span>Nivelar Espejo</span>
-                    </button>
-                </form>
-            <?php endif; ?>
-            <form method="POST" style="display:inline;">
-                <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
-                <input type="hidden" name="action" value="backup">
-                <button type="submit" class="btn" title="Generar Snapshot manual">
-                    <svg class="icon"><use href="#icon-save"></use></svg>
-                    <span>Snapshot</span>
+
+            <!-- Menú Desplegable 'Más Acciones' (visible en tablets, laptops compactas y móviles) -->
+            <div class="topbar-overflow-container" id="topbarOverflowContainer">
+                <button type="button" class="btn btn-icon overflow-trigger-btn" id="topbarOverflowBtn" onclick="toggleTopbarOverflow(event)" title="Más opciones">
+                    <svg class="icon"><use href="#icon-more-horizontal"></use></svg>
                 </button>
-            </form>
-            <button type="button" class="btn" onclick="openRollbackModal()" title="Revertir el último lote de migraciones aplicado" <?= empty($lastBatchMigrations) ? 'disabled' : '' ?>>
-                <svg class="icon"><use href="#icon-undo"></use></svg>
-                <span>Rollback</span>
-            </button>
+                <div class="topbar-overflow-menu" id="topbarOverflowMenu">
+                    <button type="button" class="overflow-item" onclick="openServerModal(); closeTopbarOverflow();">
+                        <svg class="icon"><use href="#icon-database"></use></svg>
+                        <span>Servidores</span>
+                    </button>
+                    <form method="POST" style="margin: 0;">
+                        <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
+                        <input type="hidden" name="action" value="backup">
+                        <button type="submit" class="overflow-item" onclick="closeTopbarOverflow();">
+                            <svg class="icon"><use href="#icon-save"></use></svg>
+                            <span>Generar Snapshot</span>
+                        </button>
+                    </form>
+                    <button type="button" class="overflow-item" onclick="openRollbackModal(); closeTopbarOverflow();" <?= empty($lastBatchMigrations) ? 'disabled' : '' ?>>
+                        <svg class="icon"><use href="#icon-undo"></use></svg>
+                        <span>Rollback Migración</span>
+                    </button>
+                    <?php if (!empty($selectedEnv['is_my_mirror'])): ?>
+                        <form method="POST" style="margin: 0;" onsubmit="return confirm('¿Deseas nivelar tu espejo aplicando las migraciones pendientes desde la BD Principal?');">
+                            <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
+                            <input type="hidden" name="action" value="sync_from_mirror">
+                            <button type="submit" class="overflow-item" style="color: #3b82f6;" onclick="closeTopbarOverflow();">
+                                <svg class="icon"><use href="#icon-refresh-cw"></use></svg>
+                                <span>Nivelar Espejo</span>
+                            </button>
+                        </form>
+                    <?php endif; ?>
+                    <button type="button" class="overflow-item" onclick="openHelpModal(); closeTopbarOverflow();">
+                        <svg class="icon"><use href="#icon-help"></use></svg>
+                        <span>Ayuda Técnica</span>
+                    </button>
+                    <?php if ($authManager->isTeamMode()): ?>
+                        <a href="?action=logout" class="overflow-item text-danger">
+                            <svg class="icon"><use href="#icon-log-out"></use></svg>
+                            <span>Cerrar Sesión</span>
+                        </a>
+                    <?php endif; ?>
+                </div>
+            </div>
+
             <?php if ($authManager->isTeamMode()): ?>
-                <a href="?action=logout" class="btn btn-icon" title="Cerrar Sesión (<?= htmlspecialchars($currentUser->username) ?>)">
+                <a href="?action=logout" class="btn btn-icon hide-on-compact" title="Cerrar Sesión (<?= htmlspecialchars($currentUser->username) ?>)">
                     <svg class="icon"><use href="#icon-log-out"></use></svg>
                 </a>
             <?php endif; ?>
 
-            <button type="button" class="btn btn-primary" onclick="openSyncModal()" <?= (empty($pendingList) || !empty($divergentList)) ? 'disabled' : '' ?>>
+            <!-- Botón Principal de Sincronización (siempre visible y destacado) -->
+            <button type="button" class="btn btn-primary topbar-sync-btn" onclick="openSyncModal()" <?= (empty($pendingList) || !empty($divergentList)) ? 'disabled' : '' ?>>
                 <svg class="icon" style="stroke: #ffffff;"><use href="#icon-play"></use></svg>
                 <span>Sincronizar (<?= count($pendingList) ?>)</span>
             </button>
@@ -755,9 +973,15 @@ $envBackups = $selectedEnv
                                 <svg class="icon" style="opacity: 0.6;"><use href="#icon-database"></use></svg>
                                 <span><?= htmlspecialchars($env['label'] ?? $envKey) ?></span>
                             </div>
-                            <span class="status-badge badge-muted env-status-pill" id="badge-<?= htmlspecialchars($envKey) ?>">
-                                <?= $isActive ? 'ACTIVO' : 'CONECTAR' ?>
-                            </span>
+                            <?php if ($summary && $summary['status'] === 'SINCRONIZADO'): ?>
+                                <span class="status-badge badge-sync" id="badge-<?= htmlspecialchars($envKey) ?>" style="font-size: 10px; font-weight: 600;">AL DÍA</span>
+                            <?php elseif ($summary && $summary['status'] === 'ATRASADO'): ?>
+                                <span class="status-badge badge-warn" id="badge-<?= htmlspecialchars($envKey) ?>" style="font-size: 10px; font-weight: 600;">-<?= $summary['pending'] ?></span>
+                            <?php else: ?>
+                                <span class="status-badge badge-muted" id="badge-<?= htmlspecialchars($envKey) ?>" style="font-size: 10px; font-weight: 500;">
+                                    <?= $isActive ? 'ACTIVO' : '' ?>
+                                </span>
+                            <?php endif; ?>
                         </a>
                     </li>
 
@@ -782,7 +1006,190 @@ $envBackups = $selectedEnv
             <img src="/assets/logo/imagotipo-modo-claro-oscuro.webp" alt="SYNCDERO Watermark" class="canvas-watermark logo-light">
             <img src="/assets/logo/imagotipo-modo-oscuro-claro.webp" alt="SYNCDERO Watermark" class="canvas-watermark logo-dark" style="display: none;">
 
-            <!-- A. VISTA 1 (POR DEFECTO): Tabla / Línea de Tiempo Estructurada -->
+            <!-- A. VISTA 0: Matriz General de Espejos (Solo disponible si hay múltiples entornos) -->
+            <?php if ($hasMultipleEnvs && $mirrorsOverview): ?>
+                <div class="mirrors-matrix-view" id="mirrorsOverviewView" style="display: none;">
+                    <div class="matrix-header">
+                        <div class="matrix-title-row">
+                            <div>
+                                <h2 style="font-size: 16px; font-weight: 700; letter-spacing: -0.2px; display: flex; align-items: center; gap: 8px;">
+                                    <svg class="icon" style="color: var(--brand-blue);"><use href="#icon-grid"></use></svg>
+                                    <span>Matriz General de Bases de Datos y Espejos</span>
+                                </h2>
+                                <p style="font-size: 12px; color: var(--text-muted); margin-top: 3px;">
+                                    Ecosistema: <strong><?= count($mirrorsOverview['environments']) ?> entornos</strong> · 
+                                    Migraciones en disco: <strong><?= $mirrorsOverview['total_disk_migrations'] ?> scripts</strong>
+                                    <?php if ($referenceEnvKey): ?>
+                                        · BD Principal de Referencia: <strong style="color: var(--brand-blue);"><?= htmlspecialchars($referenceEnvKey) ?> (<?= $mirrorsOverview['reference_applied'] ?> migraciones)</strong>
+                                    <?php endif; ?>
+                                </p>
+                            </div>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <a href="?env=<?= urlencode($selectedEnvKey) ?>" class="btn btn-sm" title="Recargar estado actual">
+                                    <svg class="icon"><use href="#icon-refresh-cw"></use></svg>
+                                    <span>Actualizar</span>
+                                </a>
+                            </div>
+                        </div>
+
+                        <!-- Tarjetas de métricas superiores (Bento Grid) -->
+                        <div class="matrix-kpi-grid">
+                            <div class="matrix-kpi-card" title="Entorno de referencia: <?= htmlspecialchars($referenceEnvKey ?: 'db_main') ?>">
+                                <span class="matrix-kpi-label">BD Principal (Referencia)</span>
+                                <div class="matrix-kpi-value" style="color: var(--brand-blue);">
+                                    <?= htmlspecialchars($environments[$referenceEnvKey]['label'] ?? ($referenceEnvKey ?: 'db_main')) ?>
+                                </div>
+                                <span class="matrix-kpi-sub"><?= $mirrorsOverview['reference_applied'] ?> migraciones ejecutadas</span>
+                            </div>
+                            <div class="matrix-kpi-card">
+                                <span class="matrix-kpi-label">Total en Disco</span>
+                                <div class="matrix-kpi-value">
+                                    <?= $mirrorsOverview['total_disk_migrations'] ?>
+                                </div>
+                                <span class="matrix-kpi-sub">Scripts versionados en /migrations</span>
+                            </div>
+                            <?php 
+                                $syncedCount = 0;
+                                $behindCount = 0;
+                                foreach ($mirrorsOverview['environments'] as $mEnv) {
+                                    if ($mEnv['status'] === 'SINCRONIZADO') $syncedCount++;
+                                    if ($mEnv['status'] === 'ATRASADO') $behindCount++;
+                                }
+                            ?>
+                            <div class="matrix-kpi-card">
+                                <span class="matrix-kpi-label">Espejos al Día</span>
+                                <div class="matrix-kpi-value" style="color: #10b981;">
+                                    <?= $syncedCount ?> / <?= count($mirrorsOverview['environments']) ?>
+                                </div>
+                                <span class="matrix-kpi-sub">En sincronía total</span>
+                            </div>
+                            <div class="matrix-kpi-card">
+                                <span class="matrix-kpi-label">Requieren Sincronización</span>
+                                <div class="matrix-kpi-value" style="color: <?= $behindCount > 0 ? '#f59e0b' : 'var(--text-muted)' ?>;">
+                                    <?= $behindCount ?>
+                                </div>
+                                <span class="matrix-kpi-sub"><?= $behindCount > 0 ? 'Con cambios pendientes' : 'Ningún atraso detectado' ?></span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tabla Comparativa de Entornos -->
+                    <div class="table-card" style="margin-top: 14px;">
+                        <table class="data-table matrix-table">
+                            <thead>
+                                <tr>
+                                    <th>Entorno / Base de Datos</th>
+                                    <th>Rol</th>
+                                    <th>Desarrollador / Propietario</th>
+                                    <th style="text-align: center;">Progreso</th>
+                                    <th>Estado de Sincronía</th>
+                                    <th style="text-align: right;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($mirrorsOverview['environments'] as $envKey => $mEnv): ?>
+                                    <?php 
+                                        $isSelected = ($envKey === $selectedEnvKey);
+                                        $isRef = $mEnv['is_reference'];
+                                        $pct = $mEnv['total'] > 0 ? round(($mEnv['applied'] / $mEnv['total']) * 100) : 0;
+                                    ?>
+                                    <tr class="<?= $isSelected ? 'matrix-row-selected' : '' ?>">
+                                        <td>
+                                            <div style="display: flex; align-items: flex-start; gap: 8px;">
+                                                <svg class="icon" style="color: <?= $isRef ? 'var(--brand-blue)' : 'var(--text-muted)' ?>; margin-top: 2px;"><use href="#icon-database"></use></svg>
+                                                <div>
+                                                    <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                                                        <a href="?env=<?= urlencode($envKey) ?>" style="font-weight: 600; color: var(--text-primary); text-decoration: none;" title="Cambiar a este entorno">
+                                                            <?= htmlspecialchars($mEnv['label']) ?>
+                                                        </a>
+                                                        <?php if ($isRef): ?>
+                                                            <span class="badge-role-pill ref">REFERENCIA</span>
+                                                        <?php endif; ?>
+                                                        <?php if ($isSelected): ?>
+                                                            <span class="badge-role-pill active">ACTIVO</span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div style="font-size: 11px; color: var(--text-muted); margin-top: 1px;">
+                                                        <code><?= htmlspecialchars($envKey) ?></code> · <?= strtoupper($mEnv['driver']) ?>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <span class="badge-role-pill <?= strtolower($mEnv['role']) ?>">
+                                                <?= strtoupper($mEnv['role']) ?>
+                                            </span>
+                                        </td>
+                                        <td>
+                                            <?php if (!empty($mEnv['owner_label'])): ?>
+                                                <div style="display: flex; align-items: center; gap: 6px;">
+                                                    <div class="user-avatar-tiny"><?= strtoupper(substr($mEnv['owner_label'], 0, 1)) ?></div>
+                                                    <span style="font-size: 12px; font-weight: 500;"><?= htmlspecialchars($mEnv['owner_label']) ?></span>
+                                                </div>
+                                            <?php else: ?>
+                                                <span style="font-size: 11px; color: var(--text-muted);">Compartido / General</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td style="text-align: center; min-width: 120px;">
+                                            <div style="display: flex; align-items: center; gap: 8px; justify-content: center;">
+                                                <div class="matrix-progress-bar">
+                                                    <?php 
+                                                        $fillClass = 'sync';
+                                                        if ($mEnv['status'] === 'ATRASADO') $fillClass = 'warn';
+                                                        elseif ($mEnv['status'] === 'ADELANTADO') $fillClass = 'info';
+                                                        elseif ($mEnv['status'] === 'ERROR') $fillClass = 'danger';
+                                                        $barPct = min(100, $pct);
+                                                    ?>
+                                                    <div class="matrix-progress-fill <?= $fillClass ?>" style="width: <?= $barPct ?>%;"></div>
+                                                </div>
+                                                <span style="font-size: 11px; font-weight: 500; color: var(--text-secondary);">
+                                                    <?= $mEnv['applied'] ?>/<?= $mEnv['total'] ?>
+                                                </span>
+                                            </div>
+                                        </td>
+                                        <td>
+                                            <?php if ($mEnv['status'] === 'SINCRONIZADO'): ?>
+                                                <span class="status-badge badge-sync">
+                                                    <span class="status-dot dot-sync"></span>
+                                                    <span>Al día</span>
+                                                </span>
+                                            <?php elseif ($mEnv['status'] === 'ATRASADO'): ?>
+                                                <span class="status-badge badge-warn" title="Faltan <?= $mEnv['diff_count'] ?> migraciones para alcanzar a la BD Principal">
+                                                    <span class="status-dot dot-warn"></span>
+                                                    <span>Atrasado (-<?= $mEnv['diff_count'] ?>)</span>
+                                                </span>
+                                            <?php elseif ($mEnv['status'] === 'ADELANTADO'): ?>
+                                                <span class="status-badge badge-role-pill dev">
+                                                    <span class="status-dot dot-info"></span>
+                                                    <span>Adelantado (+<?= $mEnv['diff_count'] ?>)</span>
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="status-badge badge-danger">
+                                                    <span class="status-dot dot-danger"></span>
+                                                    <span>Sin conexión</span>
+                                                </span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td style="text-align: right; white-space: nowrap;">
+                                            <a href="?env=<?= urlencode($envKey) ?>" class="btn btn-sm" title="Inspeccionar historial detallado de <?= htmlspecialchars($envKey) ?>">
+                                                <span>Historial</span>
+                                            </a>
+                                            <?php if ($mEnv['status'] === 'ATRASADO'): ?>
+                                                <a href="?env=<?= urlencode($envKey) ?>&auto_sync=1" class="btn btn-sm btn-primary" title="Abrir y nivelar este espejo">
+                                                    <svg class="icon" style="stroke: #ffffff; width:10px; height:10px;"><use href="#icon-refresh-cw"></use></svg>
+                                                    <span>Nivelar</span>
+                                                </a>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            <?php endif; ?>
+
+            <!-- B. VISTA 1: Tabla / Línea de Tiempo Estructurada -->
             <div class="timeline-table-view" id="timelineTableView">
                 <div class="timeline-table-header">
                     <div class="timeline-title-row">
@@ -794,11 +1201,29 @@ $envBackups = $selectedEnv
                                 Sincronizados: <strong><?= $activeInspection['total_applied'] ?? 0 ?> / <?= $activeInspection['total_disk'] ?? 0 ?></strong>
                             </p>
                         </div>
-                        <div style="display: flex; gap: 8px;">
+                        <div class="timeline-title-actions" style="display: flex; gap: 8px; align-items: center;">
+                            <!-- Selector de Vista Visible en Móvil cuando la barra superior lo oculta -->
+                            <div class="view-mode-toggle mobile-view-toggle mobile-only">
+                                <?php if ($hasMultipleEnvs): ?>
+                                    <button type="button" class="view-btn" id="mobileViewBtnOverview" onclick="switchViewMode('overview')" title="General">
+                                        <svg class="icon" style="width:13px; height:13px;"><use href="#icon-grid"></use></svg>
+                                        <span>General</span>
+                                    </button>
+                                <?php endif; ?>
+                                <button type="button" class="view-btn active" id="mobileViewBtnTable" onclick="switchViewMode('table')" title="Historial">
+                                    <svg class="icon" style="width:13px; height:13px;"><use href="#icon-table"></use></svg>
+                                    <span>Historial</span>
+                                </button>
+                                <button type="button" class="view-btn" id="mobileViewBtnCanvas" onclick="switchViewMode('canvas')" title="Lienzo">
+                                    <svg class="icon" style="width:13px; height:13px;"><use href="#icon-layout"></use></svg>
+                                    <span>Lienzo</span>
+                                </button>
+                            </div>
+
                             <?php if (!empty($pendingList)): ?>
                                 <button type="button" class="btn btn-primary" onclick="openSyncModal()">
                                     <svg class="icon" style="stroke: #ffffff;"><use href="#icon-play"></use></svg>
-                                    <span>Sincronizar Pendientes (<?= count($pendingList) ?>)</span>
+                                    <span>Sincronizar (<?= count($pendingList) ?>)</span>
                                 </button>
                             <?php endif; ?>
                         </div>
@@ -822,7 +1247,12 @@ $envBackups = $selectedEnv
                             <!-- Divergencias primero si las hay -->
                             <?php foreach ($divergentList as $name => $divItem): ?>
                                 <tr class="row-drift" onclick="openDiffModal('<?= htmlspecialchars($name, ENT_QUOTES) ?>')">
-                                    <td><span class="status-badge badge-danger">DIVERGENTE</span></td>
+                                    <td>
+                                        <span class="status-badge badge-danger">
+                                            <span class="status-dot dot-danger"></span>
+                                            <span>Divergente</span>
+                                        </span>
+                                    </td>
                                     <td>
                                         <div style="font-weight: 600;"><?= htmlspecialchars($divItem['file']->basename) ?></div>
                                         <div style="font-size: 10px; color: var(--state-danger-text);">El script en disco no coincide con el hash en la BD</div>
@@ -840,12 +1270,17 @@ $envBackups = $selectedEnv
                             <!-- Migraciones Pendientes -->
                             <?php foreach ($pendingList as $item): ?>
                                 <tr class="row-pending" onclick="openDiffModal('<?= htmlspecialchars($item['file']->basename, ENT_QUOTES) ?>')">
-                                    <td><span class="status-badge badge-warn">PENDIENTE</span></td>
+                                    <td>
+                                        <span class="status-badge badge-warn">
+                                            <span class="status-dot dot-warn"></span>
+                                            <span>Pendiente</span>
+                                        </span>
+                                    </td>
                                     <td>
                                         <div style="font-weight: 600;"><?= htmlspecialchars($item['file']->basename) ?></div>
                                         <div style="font-size: 11px; color: var(--text-muted);"><?= htmlspecialchars($item['file']->description) ?></div>
                                     </td>
-                                    <td><span style="color: var(--text-muted); font-size: 11px;">Próximo</span></td>
+                                    <td><span style="color: var(--text-muted); font-size: 11px;">—</span></td>
                                     <td><span style="color: var(--text-muted); font-size: 11px;">En espera</span></td>
                                     <td><span style="color: var(--text-muted); font-size: 11px;">Sin aplicar</span></td>
                                     <td><code style="font-size: 10px;"><?= substr($item['file']->hash, 0, 8) ?>...</code></td>
@@ -874,7 +1309,12 @@ $envBackups = $selectedEnv
                             <?php else: ?>
                                 <?php foreach ($appliedRows as $row): ?>
                                     <tr onclick="openDiffModal('<?= htmlspecialchars($row['file']->basename, ENT_QUOTES) ?>')">
-                                        <td><span class="status-badge badge-sync">SINCRONIZADO</span></td>
+                                        <td>
+                                            <span class="status-badge badge-sync">
+                                                <span class="status-dot dot-sync"></span>
+                                                <span>Aplicada</span>
+                                            </span>
+                                        </td>
                                         <td>
                                             <div style="font-weight: 500;"><?= htmlspecialchars($row['file']->basename) ?></div>
                                             <?php if (!empty($row['db']['note'])): ?>
@@ -901,40 +1341,249 @@ $envBackups = $selectedEnv
                 </div>
             </div>
 
-            <!-- B. VISTA 2 (OPCIONAL): Diagrama / Lienzo de Nodos Flow -->
+            <!-- B. VISTA 2: Lienzo Topológico de Arquitectura & Nodos de Flujo -->
             <div class="flow-viewport" id="flowViewport" style="display: none;">
+                <!-- Barra de control del Lienzo -->
+                <div class="canvas-floating-toolbar" style="margin-bottom: 24px; position: sticky; top: 12px; z-index: 50;">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span style="font-size: 11px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.5px;">Vista del Lienzo:</span>
+                        <div class="view-mode-toggle" style="padding: 2px;">
+                            <button type="button" class="view-btn active" id="canvasSubViewTopologyBtn" onclick="switchCanvasSubView('topology')">
+                                <svg class="icon" style="width:12px; height:12px;"><use href="#icon-grid"></use></svg>
+                                <span>Topología del Proyecto</span>
+                            </button>
+                            <button type="button" class="view-btn" id="canvasSubViewBatchesBtn" onclick="switchCanvasSubView('batches')">
+                                <svg class="icon" style="width:12px; height:12px;"><use href="#icon-layers"></use></svg>
+                                <span>Lotes Ejecutados (<?= count($batches) ?>)</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- SVG Wire Connections -->
                 <svg id="flowSvgWires" class="flow-connections-svg"></svg>
 
                 <?php if ($connectionError): ?>
-                    <div style="position: absolute; top: 40px; left: 40px; max-width: 420px; background: var(--state-danger-bg); color: var(--state-danger-text); border: 1px solid var(--state-danger-border); border-radius: 4px; padding: 14px 16px; font-size: 12px; display: flex; gap: 10px; align-items: flex-start;">
+                    <div style="position: absolute; top: 70px; left: 40px; max-width: 420px; background: var(--state-danger-bg); color: var(--state-danger-text); border: 1px solid var(--state-danger-border); border-radius: 4px; padding: 14px 16px; font-size: 12px; display: flex; gap: 10px; align-items: flex-start; z-index: 60;">
                         <svg class="icon"><use href="#icon-alert"></use></svg>
                         <div>
                             <strong>No se puede inspeccionar el entorno</strong><br>
                             <?= htmlspecialchars($connectionError) ?>
                         </div>
                     </div>
-                <?php elseif ($activeInspection === null && $selectedEnv === null): ?>
-                    <div style="position: absolute; top: 40px; left: 40px; color: var(--text-subtle); font-size: 13px;">
-                        No hay entornos configurados. Abre <strong>Servidores</strong> para añadir una conexión.
-                    </div>
                 <?php endif; ?>
 
+                <!-- SUB-VISTA 1: Topología de Arquitectura (Git -> Prod -> Staging -> Espejos) -->
+                <div id="canvasTopologySubView" style="position: relative; min-height: 700px; width: 100%;">
+                    <?php 
+                        // Identificar entornos por roles
+                        $prodEnvKey = null;
+                        $stagingEnvKey = null;
+                        $devEnvs = [];
 
+                        foreach ($environments as $eKey => $eConfig) {
+                            $r = $eConfig['role'] ?? 'dev';
+                            if ($r === 'prod' || $eKey === $referenceEnvKey) {
+                                if (!$prodEnvKey) $prodEnvKey = $eKey;
+                            } elseif ($r === 'staging') {
+                                if (!$stagingEnvKey) $stagingEnvKey = $eKey;
+                            } else {
+                                $devEnvs[$eKey] = $eConfig;
+                            }
+                        }
+                        if (!$prodEnvKey && !empty($environments)) {
+                            $prodEnvKey = array_key_first($environments);
+                        }
+                    ?>
+
+                    <!-- NODO 1: Origen de Código / Repositorio Git -->
+                    <div class="flow-node topology-node" id="nodeGitSource" data-node-type="git" style="left: 40px; top: 60px;">
+                        <span class="node-connector-dot right"></span>
+                        <div class="node-header header-blue">
+                            <div class="node-header-title">
+                                <svg class="icon"><use href="#icon-git-branch"></use></svg>
+                                <span>Código / Repositorio Git</span>
+                            </div>
+                            <span class="badge-role-pill dev">ORIGEN</span>
+                        </div>
+                        <div class="node-body">
+                            <div class="node-prop-row">
+                                <span class="node-prop-label">Proyecto</span>
+                                <div class="node-prop-value" style="font-weight: 700; color: var(--brand-blue);">
+                                    <?= htmlspecialchars($activeProject['name'] ?? $selectedProjectKey) ?>
+                                </div>
+                            </div>
+                            <div class="node-prop-row">
+                                <span class="node-prop-label">Rama Activa / Commit</span>
+                                <div class="node-prop-value" style="font-family: var(--font-mono); font-size: 11px;">
+                                    <?= htmlspecialchars($gitInfo['branch']) ?> (<?= htmlspecialchars($gitInfo['commit']) ?>)
+                                </div>
+                            </div>
+                            <div class="node-prop-row">
+                                <span class="node-prop-label">Scripts en Disco</span>
+                                <div class="node-prop-value">
+                                    <strong><?= count($stateEngine->getMigrationFiles()) ?></strong> migraciones versionadas
+                                </div>
+                            </div>
+                            <div style="font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); word-break: break-all; margin-top: 4px;">
+                                <?= htmlspecialchars($config->getMigrationsDir()) ?>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- NODO 2: Base de Datos Principal (Producción / Reference) -->
+                    <?php if ($prodEnvKey && isset($environments[$prodEnvKey])): 
+                        $prodEnv = $environments[$prodEnvKey];
+                        $prodMeta = $mirrorsOverview['environments'][$prodEnvKey] ?? null;
+                    ?>
+                        <div class="flow-node topology-node" id="nodeProdDb" data-node-type="prod" style="left: 420px; top: 60px;">
+                            <span class="node-connector-dot left"></span>
+                            <span class="node-connector-dot right"></span>
+                            <div class="node-header header-green">
+                                <div class="node-header-title">
+                                    <svg class="icon"><use href="#icon-database"></use></svg>
+                                    <span><?= htmlspecialchars($prodEnv['label'] ?? $prodEnvKey) ?></span>
+                                </div>
+                                <span class="badge-role-pill prod">PROD / REF</span>
+                            </div>
+                            <div class="node-body">
+                                <div class="node-prop-row">
+                                    <span class="node-prop-label">Motor & BD</span>
+                                    <div class="node-prop-value" style="font-family: var(--font-mono);">
+                                        <?= strtoupper($prodEnv['driver'] ?? 'pgsql') ?> · <?= htmlspecialchars(basename($prodEnv['database'] ?? 'db')) ?>
+                                    </div>
+                                </div>
+                                <div class="node-prop-row">
+                                    <span class="node-prop-label">Migraciones Aplicadas</span>
+                                    <div class="node-prop-value" style="color: #10b981; font-weight: 700;">
+                                        <?= $prodMeta ? $prodMeta['applied'] : ($activeInspection['total_applied'] ?? 0) ?> / <?= count($stateEngine->getMigrationFiles()) ?>
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                    <a href="?env=<?= urlencode($prodEnvKey) ?>" class="btn btn-sm" style="flex: 1; text-align: center; justify-content: center;">
+                                        <span>Seleccionar</span>
+                                    </a>
+                                    <form method="POST" style="margin: 0;">
+                                        <input type="hidden" name="_csrf" value="<?= htmlspecialchars($csrfToken) ?>">
+                                        <input type="hidden" name="action" value="backup">
+                                        <button type="submit" class="btn btn-sm" title="Generar Snapshot">
+                                            <svg class="icon"><use href="#icon-save"></use></svg>
+                                            <span>Snapshot</span>
+                                        </button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <!-- NODO 3: Base de Datos Staging (Pre-producción si existe) -->
+                    <?php if ($stagingEnvKey && isset($environments[$stagingEnvKey])): 
+                        $stagEnv = $environments[$stagingEnvKey];
+                        $stagMeta = $mirrorsOverview['environments'][$stagingEnvKey] ?? null;
+                    ?>
+                        <div class="flow-node topology-node" id="nodeStagingDb" data-node-type="staging" style="left: 420px; top: 320px;">
+                            <span class="node-connector-dot left"></span>
+                            <div class="node-header header-purple">
+                                <div class="node-header-title">
+                                    <svg class="icon"><use href="#icon-database"></use></svg>
+                                    <span><?= htmlspecialchars($stagEnv['label'] ?? $stagingEnvKey) ?></span>
+                                </div>
+                                <span class="badge-role-pill staging">STAGING</span>
+                            </div>
+                            <div class="node-body">
+                                <div class="node-prop-row">
+                                    <span class="node-prop-label">Estado frente a Prod</span>
+                                    <div class="node-prop-value">
+                                        <?php if ($stagMeta && $stagMeta['status'] === 'SINCRONIZADO'): ?>
+                                            <span class="status-badge badge-sync">AL DÍA</span>
+                                        <?php elseif ($stagMeta && $stagMeta['status'] === 'ATRASADO'): ?>
+                                            <span class="status-badge badge-warn">-<?= $stagMeta['diff_count'] ?> pendientes</span>
+                                        <?php else: ?>
+                                            <span class="status-badge badge-muted">Activo</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                    <a href="?env=<?= urlencode($stagingEnvKey) ?>" class="btn btn-sm" style="flex: 1; text-align: center; justify-content: center;">
+                                        <span>Seleccionar</span>
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endif; ?>
+
+                    <!-- NODOS 4+: Espejos de Desarrolladores (Docker / Local) -->
+                    <?php 
+                        $mirrorPosY = 60;
+                        $mirrorIndex = 0;
+                        foreach ($devEnvs as $dKey => $dConfig): 
+                            if ($mirrorIndex >= 4) break; // Mostrar hasta 4 espejos principales en el lienzo inicial
+                            $dMeta = $mirrorsOverview['environments'][$dKey] ?? null;
+                            $nodeId = 'nodeDevMirror_' . $mirrorIndex;
+                    ?>
+                        <div class="flow-node topology-node" id="<?= $nodeId ?>" data-node-type="mirror" style="left: 800px; top: <?= $mirrorPosY ?>px;">
+                            <span class="node-connector-dot left"></span>
+                            <div class="node-header header-gray">
+                                <div class="node-header-title">
+                                    <svg class="icon"><use href="#icon-database"></use></svg>
+                                    <span><?= htmlspecialchars($dConfig['label'] ?? $dKey) ?></span>
+                                </div>
+                                <span class="badge-role-pill dev"><?= strtoupper($dConfig['role'] ?? 'DEV') ?></span>
+                            </div>
+                            <div class="node-body">
+                                <div class="node-prop-row">
+                                    <span class="node-prop-label">Propietario / Rol</span>
+                                    <div class="node-prop-value" style="font-size: 11px;">
+                                        <?= htmlspecialchars($dMeta['owner_label'] ?? 'Compartido') ?>
+                                    </div>
+                                </div>
+                                <div class="node-prop-row">
+                                    <span class="node-prop-label">Sincronía vs BD Principal</span>
+                                    <div class="node-prop-value">
+                                        <?php if ($dMeta && $dMeta['status'] === 'SINCRONIZADO'): ?>
+                                            <span class="status-badge badge-sync">100% AL DÍA</span>
+                                        <?php elseif ($dMeta && $dMeta['status'] === 'ATRASADO'): ?>
+                                            <span class="status-badge badge-warn">-<?= $dMeta['diff_count'] ?> atraso</span>
+                                        <?php else: ?>
+                                            <span class="status-badge badge-muted">Conectado</span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                                <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                    <a href="?env=<?= urlencode($dKey) ?>" class="btn btn-sm" style="flex: 1; text-align: center; justify-content: center;">
+                                        <span>Historial</span>
+                                    </a>
+                                    <?php if ($dMeta && $dMeta['status'] === 'ATRASADO'): ?>
+                                        <a href="?env=<?= urlencode($dKey) ?>&auto_sync=1" class="btn btn-sm btn-primary" title="Nivelar espejo con BD Principal">
+                                            <svg class="icon" style="stroke:#ffffff; width:10px; height:10px;"><use href="#icon-refresh-cw"></use></svg>
+                                            <span>Nivelar</span>
+                                        </a>
+                                    <?php endif; ?>
+                                </div>
+                            </div>
+                        </div>
+                    <?php 
+                            $mirrorPosY += 220;
+                            $mirrorIndex++;
+                        endforeach; 
+                    ?>
+                </div>
+
+                <!-- SUB-VISTA 2: Lotes de Migraciones (Batches Ejecutados) -->
+                <div id="canvasBatchesSubView" style="display: none; position: relative; min-height: 700px; width: 100%;">
                 <?php 
                     $posX = 40;
                     $posY = 60;
                     $nodeIndex = 0;
                     $colors = ['header-green', 'header-blue', 'header-purple', 'header-gray'];
                 ?>
-
                 <!-- Nodos de Batches Aplicados (Committed) -->
                 <?php foreach ($batches as $batchNum => $items): ?>
                     <?php 
                         $colorClass = $colors[$nodeIndex % count($colors)];
                         $nodeIndex++;
                     ?>
-                    <div class="flow-node" data-status="applied" style="left: <?= $posX ?>px; top: <?= $posY ?>px;">
+                    <div class="flow-node batch-flow-node" data-status="applied" style="left: <?= $posX ?>px; top: <?= $posY ?>px;">
                         <span class="node-connector-dot left"></span>
                         <div class="node-header <?= $colorClass ?>">
                             <div class="node-header-title">
@@ -978,7 +1627,7 @@ $envBackups = $selectedEnv
 
                 <!-- Nodo de Pendientes (Unstaged) -->
                 <?php if (!empty($pendingList)): ?>
-                    <div class="flow-node" data-status="pending" style="left: <?= $posX ?>px; top: <?= $posY ?>px;">
+                    <div class="flow-node batch-flow-node" data-status="pending" style="left: <?= $posX ?>px; top: <?= $posY ?>px;">
                         <span class="node-connector-dot left"></span>
                         <div class="node-header header-coral">
                             <div class="node-header-title">
@@ -1003,7 +1652,7 @@ $envBackups = $selectedEnv
                         <span class="node-connector-dot right"></span>
                     </div>
                 <?php endif; ?>
-
+                </div>
             </div>
 
             <!-- Botones flotantes móviles para abrir paneles laterales -->
@@ -1088,7 +1737,9 @@ $envBackups = $selectedEnv
                             </div>
                             <div style="display:flex; justify-content:space-between; align-items:center; gap:6px;">
                                 <span style="font-size:10px; color:var(--text-muted);"><?= date('Y-m-d H:i', $bk['modified']) ?> · <?= number_format($bk['size'] / 1024, 1) ?> KB</span>
-                                <button type="submit" class="btn" style="padding:2px 8px; font-size:10px;" title="Restaurar este snapshot en el entorno activo">Restaurar</button>
+                                <div style="display:flex; gap:4px; align-items:center;">
+                                    <button type="submit" class="btn" style="padding:2px 6px; font-size:10px;" title="Restaurar este snapshot en el entorno activo">Restaurar</button>
+                                </div>
                             </div>
                             <?php if (($selectedEnv['protected'] ?? false) === true): ?>
                                 <input type="password" name="password" placeholder="Contraseña de autorización..." required style="font-size:10px;">
@@ -1445,7 +2096,15 @@ $envBackups = $selectedEnv
     <!-- Telón de fondo móvil para cerrar paneles deslizantes al pulsar fuera -->
     <div id="sidebarMobileBackdrop" class="sidebar-mobile-backdrop" onclick="closeMobileSidebars()"></div>
 
-    <script src="/assets/app.js"></script>
+    <script src="/assets/app.js?v=<?= @filemtime(__DIR__ . '/assets/app.js') ?: time() ?>"></script>
+    <?php if (!empty($autoOpenSyncModal)): ?>
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                switchViewMode('table');
+                setTimeout(() => openSyncModal(), 120);
+            });
+        </script>
+    <?php endif; ?>
 </body>
 </html>
 

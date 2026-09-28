@@ -19,12 +19,21 @@ abstract class AbstractDriver implements DriverInterface
         $this->metaTable = $config['meta_table'] ?? '_syncdero_meta';
     }
 
+    protected ?string $lastConnectionError = null;
+
+    public function getLastConnectionError(): ?string
+    {
+        return $this->lastConnectionError;
+    }
+
     public function testConnection(): bool
     {
         try {
             $this->getPdo();
+            $this->lastConnectionError = null;
             return true;
-        } catch (\Throwable) {
+        } catch (\Throwable $e) {
+            $this->lastConnectionError = $e->getMessage();
             return false;
         }
     }
@@ -113,6 +122,21 @@ abstract class AbstractDriver implements DriverInterface
         }
 
         return $migrations;
+    }
+
+    /**
+     * Retorna únicamente el número de migraciones aplicadas de forma ultra rápida (SELECT COUNT).
+     */
+    public function getAppliedCount(): int
+    {
+        try {
+            $pdo = $this->getPdo();
+            $this->ensureMetadataTable();
+            $stmt = $pdo->query("SELECT COUNT(*) FROM {$this->metaTable}");
+            return (int)$stmt->fetchColumn();
+        } catch (\Throwable) {
+            return 0;
+        }
     }
 
     /**

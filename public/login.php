@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Iniciar Sesión — SYNCDERO</title>
-    <link rel="stylesheet" href="/assets/style.css">
-    <link rel="stylesheet" href="/assets/icons.css">
+    <link rel="stylesheet" href="/assets/style.css?v=<?= @filemtime(__DIR__ . '/assets/style.css') ?: time() ?>">
+    <link rel="stylesheet" href="/assets/icons.css?v=<?= @filemtime(__DIR__ . '/assets/icons.css') ?: time() ?>">
     <link rel="icon" type="image/x-icon" href="/favicon.ico">
     <style>
         .login-wrapper {

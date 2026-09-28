@@ -508,5 +508,108 @@ class StateEngine
             'is_in_sync' => empty($missingInTarget) && empty($divergent),
         ];
     }
+
+    /**
+     * Genera la matriz comparativa de todos los entornos frente a la BD Principal o frente al disco.
+     *
+     * @param array<string, array> $environments
+     * @param ?string $referenceEnvKey
+     * @return array{
+     *   total_disk_migrations: int,
+     *   reference_applied: int,
+     *   environments: array<string, array{
+     *     key: string,
+     *     label: string,
+     *     role: string,
+     *     driver: string,
+     *     applied: int,
+     *     total: int,
+     *     status: string,
+     *     diff_count: int,
+     *     error: ?string,
+     *     owner_label: ?string
+     *   }>
+     * }
+     */
+    public function getMirrorsOverview(array $environments, ?string $referenceEnvKey = null, array $ownersMap = []): array
+    {
+        $diskFiles = $this->getMigrationFiles();
+        $totalDisk = count($diskFiles);
+
+        $refAppliedCount = $totalDisk;
+        $refAppliedMap = [];
+
+        // Si hay una base de datos de referencia (Principal)
+        if ($referenceEnvKey && isset($environments[$referenceEnvKey])) {
+            try {
+                $refDriver = \Syncdero\Drivers\DriverFactory::create($environments[$referenceEnvKey]);
+                $refAppliedCount = method_exists($refDriver, 'getAppliedCount') ? $refDriver->getAppliedCount() : count($refDriver->getAppliedMigrations());
+                $refAppliedMap = ['_count_ready' => true];
+            } catch (\Throwable) {
+                // Si la BD de referencia no responde, usamos el disco como base
+            }
+        }
+
+        $overview = [];
+
+        foreach ($environments as $envKey => $envConfig) {
+            $meta = $ownersMap[$envKey] ?? [];
+            $ownerLabel = $meta['label'] ?? ($envConfig['owner_label'] ?? null);
+            $role = $meta['role'] ?? ($envConfig['role'] ?? 'dev');
+
+            try {
+                $driver = \Syncdero\Drivers\DriverFactory::create($envConfig);
+                $appliedCount = method_exists($driver, 'getAppliedCount') ? $driver->getAppliedCount() : count($driver->getAppliedMigrations());
+
+                // Determinar estado frente a la BD Principal o disco
+                $benchmarkCount = ($referenceEnvKey && $referenceEnvKey !== $envKey && !empty($refAppliedMap)) ? $refAppliedCount : $totalDisk;
+
+                if ($appliedCount === $benchmarkCount) {
+                    $status = 'SINCRONIZADO';
+                    $diffCount = 0;
+                } elseif ($appliedCount < $benchmarkCount) {
+                    $status = 'ATRASADO';
+                    $diffCount = $benchmarkCount - $appliedCount;
+                } else {
+                    $status = 'ADELANTADO';
+                    $diffCount = $appliedCount - $benchmarkCount;
+                }
+
+                $overview[$envKey] = [
+                    'key' => $envKey,
+                    'label' => $envConfig['label'] ?? $envKey,
+                    'role' => $role,
+                    'driver' => $envConfig['driver'] ?? 'pgsql',
+                    'applied' => $appliedCount,
+                    'total' => $totalDisk,
+                    'status' => $status,
+                    'diff_count' => $diffCount,
+                    'error' => null,
+                    'owner_label' => $ownerLabel,
+                    'is_reference' => ($envKey === $referenceEnvKey),
+                ];
+            } catch (\Throwable $e) {
+                $overview[$envKey] = [
+                    'key' => $envKey,
+                    'label' => $envConfig['label'] ?? $envKey,
+                    'role' => $role,
+                    'driver' => $envConfig['driver'] ?? 'pgsql',
+                    'applied' => 0,
+                    'total' => $totalDisk,
+                    'status' => 'ERROR',
+                    'diff_count' => 0,
+                    'error' => $e->getMessage(),
+                    'owner_label' => $ownerLabel,
+                    'is_reference' => ($envKey === $referenceEnvKey),
+                ];
+            }
+        }
+
+        return [
+            'total_disk_migrations' => $totalDisk,
+            'reference_applied' => $refAppliedCount,
+            'environments' => $overview,
+        ];
+    }
 }
 

@@ -7,6 +7,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initThemeToggle();
     initProfileAndSession();
     initDraggableNodes();
+    initViewMode();
     updateConnectionWires();
     initLazyStatusChecker();
 });
@@ -110,43 +111,104 @@ function initDraggableNodes() {
 // 3. Render Curved Bezier Connection Wires between Nodes
 function updateConnectionWires() {
     const svg = document.getElementById('flowSvgWires');
-    if (!svg) return;
+    const viewport = document.getElementById('flowViewport');
+    if (!svg || !viewport) return;
 
-    // Conectar nodos en secuencia (Nodo 1 -> Nodo 2 -> Nodo 3)
-    const nodes = Array.from(document.querySelectorAll('.flow-node'));
+    const topologySubView = document.getElementById('canvasTopologySubView');
+    const isTopology = topologySubView && topologySubView.style.display !== 'none';
+
     let pathsHtml = '';
+    const viewportRect = viewport.getBoundingClientRect();
 
-    for (let i = 0; i < nodes.length - 1; i++) {
-        const fromNode = nodes[i];
-        const toNode = nodes[i + 1];
+    if (isTopology) {
+        // Cableado Topológico: Git -> Prod, Prod -> Staging, Prod -> Espejos
+        const gitNode = document.getElementById('nodeGitSource');
+        const prodNode = document.getElementById('nodeProdDb');
+        const stagingNode = document.getElementById('nodeStagingDb');
+        const mirrorNodes = document.querySelectorAll('[id^="nodeDevMirror_"]');
 
-        const fromRect = fromNode.getBoundingClientRect();
-        const toRect = toNode.getBoundingClientRect();
-        const viewportRect = document.getElementById('flowViewport').getBoundingClientRect();
-
-        // Salida derecha del nodo origen
-        const x1 = fromRect.right - viewportRect.left;
-        const y1 = fromRect.top + (fromRect.height / 2) - viewportRect.top;
-
-        // Entrada izquierda del nodo destino
-        const x2 = toRect.left - viewportRect.left;
-        const y2 = toRect.top + (toRect.height / 2) - viewportRect.top;
-
-        // Control points para curva bezier suave
-        const dx = Math.abs(x2 - x1) * 0.5;
-        const cx1 = x1 + dx;
-        const cy1 = y1;
-        const cx2 = x2 - dx;
-        const cy2 = y2;
-
-        const isApplied = toNode.dataset.status === 'applied';
-        const strokeClass = isApplied ? 'flow-wire solid' : 'flow-wire';
-
-        pathsHtml += `<path d="M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}" class="${strokeClass}" />`;
+        if (gitNode && prodNode) {
+            pathsHtml += drawBezierWire(gitNode, prodNode, viewportRect, 'flow-wire solid');
+        }
+        if (prodNode && stagingNode) {
+            pathsHtml += drawBezierWire(prodNode, stagingNode, viewportRect, 'flow-wire');
+        }
+        if (prodNode) {
+            mirrorNodes.forEach(mNode => {
+                pathsHtml += drawBezierWire(prodNode, mNode, viewportRect, 'flow-wire');
+            });
+        }
+    } else {
+        // Conectar nodos de lotes en secuencia
+        const nodes = Array.from(document.querySelectorAll('.batch-flow-node'));
+        for (let i = 0; i < nodes.length - 1; i++) {
+            pathsHtml += drawBezierWire(nodes[i], nodes[i + 1], viewportRect, nodes[i + 1].dataset.status === 'applied' ? 'flow-wire solid' : 'flow-wire');
+        }
     }
 
     svg.innerHTML = pathsHtml;
 }
+
+function drawBezierWire(fromNode, toNode, viewportRect, strokeClass = 'flow-wire') {
+    const fromRect = fromNode.getBoundingClientRect();
+    const toRect = toNode.getBoundingClientRect();
+
+    const x1 = fromRect.right - viewportRect.left;
+    const y1 = fromRect.top + (fromRect.height / 2) - viewportRect.top;
+
+    const x2 = toRect.left - viewportRect.left;
+    const y2 = toRect.top + (toRect.height / 2) - viewportRect.top;
+
+    const dx = Math.abs(x2 - x1) * 0.5;
+    const cx1 = x1 + dx;
+    const cy1 = y1;
+    const cx2 = x2 - dx;
+    const cy2 = y2;
+
+    return `<path d="M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}" class="${strokeClass}" />`;
+}
+
+function switchCanvasSubView(subview) {
+    const topoView = document.getElementById('canvasTopologySubView');
+    const batchView = document.getElementById('canvasBatchesSubView');
+    const topoBtn = document.getElementById('canvasSubViewTopologyBtn');
+    const batchBtn = document.getElementById('canvasSubViewBatchesBtn');
+
+    if (subview === 'batches') {
+        if (topoView) topoView.style.display = 'none';
+        if (batchView) batchView.style.display = 'block';
+        if (topoBtn) topoBtn.classList.remove('active');
+        if (batchBtn) batchBtn.classList.add('active');
+    } else {
+        if (topoView) topoView.style.display = 'block';
+        if (batchView) batchView.style.display = 'none';
+        if (topoBtn) topoBtn.classList.add('active');
+        if (batchBtn) batchBtn.classList.remove('active');
+    }
+    setTimeout(updateConnectionWires, 40);
+}
+
+function toggleProjectDropdown(e) {
+    if (e) e.stopPropagation();
+    const menu = document.getElementById('projectDropdownMenu');
+    if (menu) {
+        menu.classList.toggle('open');
+    }
+}
+
+function closeProjectDropdown() {
+    const menu = document.getElementById('projectDropdownMenu');
+    if (menu) {
+        menu.classList.remove('open');
+    }
+}
+
+document.addEventListener('click', (e) => {
+    const container = document.querySelector('.project-selector-container');
+    if (container && !container.contains(e.target)) {
+        closeProjectDropdown();
+    }
+});
 
 // Modales con animación fluida de transitions.dev
 function smoothCloseModal(modalId) {
@@ -468,33 +530,80 @@ window.addEventListener('resize', () => {
 });
 
 
-// 6. View Mode Switching (Timeline Table vs Flow Canvas)
+// 6. View Mode Switching (Overview Matrix vs Timeline Table vs Flow Canvas)
 function switchViewMode(mode) {
+    const overviewView = document.getElementById('mirrorsOverviewView');
     const tableView = document.getElementById('timelineTableView');
     const flowView = document.getElementById('flowViewport');
-    const btnTable = document.getElementById('viewBtnTable');
-    const btnCanvas = document.getElementById('viewBtnCanvas');
+    
+    const overviewBtns = document.querySelectorAll('.view-btn[onclick*="overview"]');
+    const tableBtns = document.querySelectorAll('.view-btn[onclick*="table"]');
+    const canvasBtns = document.querySelectorAll('.view-btn[onclick*="canvas"]');
 
-    if (mode === 'canvas') {
-        if (tableView) tableView.style.display = 'none';
-        if (flowView) flowView.style.display = 'block';
-        if (btnCanvas) btnCanvas.classList.add('active');
-        if (btnTable) btnTable.classList.remove('active');
+    // Desactivar todos los botones
+    overviewBtns.forEach(b => b.classList.remove('active'));
+    tableBtns.forEach(b => b.classList.remove('active'));
+    canvasBtns.forEach(b => b.classList.remove('active'));
+
+    // Ocultar todas las vistas
+    if (overviewView) overviewView.style.display = 'none';
+    if (tableView) tableView.style.display = 'none';
+    if (flowView) flowView.style.display = 'none';
+
+    if (mode === 'overview' && overviewView) {
+        overviewView.style.display = 'block';
+        overviewBtns.forEach(b => b.classList.add('active'));
+        localStorage.setItem('syncdero-view-mode', 'overview');
+    } else if (mode === 'canvas' && flowView) {
+        flowView.style.display = 'block';
+        canvasBtns.forEach(b => b.classList.add('active'));
         localStorage.setItem('syncdero-view-mode', 'canvas');
         setTimeout(updateConnectionWires, 50);
     } else {
-        if (flowView) flowView.style.display = 'none';
         if (tableView) tableView.style.display = 'block';
-        if (btnTable) btnTable.classList.add('active');
-        if (btnCanvas) btnCanvas.classList.remove('active');
+        tableBtns.forEach(b => b.classList.add('active'));
         localStorage.setItem('syncdero-view-mode', 'table');
     }
 }
 
 function initViewMode() {
-    const savedMode = localStorage.getItem('syncdero-view-mode') || 'table';
-    switchViewMode(savedMode);
+    const overviewView = document.getElementById('mirrorsOverviewView');
+    const savedMode = localStorage.getItem('syncdero-view-mode');
+
+    // Si hay una matriz de espejos y no hay preferencia guardada previa, usar 'overview'
+    let targetMode = savedMode;
+    if (!targetMode) {
+        targetMode = overviewView ? 'overview' : 'table';
+    } else if (targetMode === 'overview' && !overviewView) {
+        targetMode = 'table';
+    }
+
+    switchViewMode(targetMode);
 }
+
+// 6.1 Dropdown de Usuario e Impersonación
+function toggleUserDropdown(e) {
+    if (e) e.stopPropagation();
+    const dropdown = document.getElementById('userDropdownMenu');
+    if (dropdown) {
+        dropdown.classList.toggle('open');
+    }
+}
+
+function closeUserDropdown() {
+    const dropdown = document.getElementById('userDropdownMenu');
+    if (dropdown) {
+        dropdown.classList.remove('open');
+    }
+}
+
+// Cerrar dropdown al hacer click fuera
+document.addEventListener('click', (e) => {
+    const userContainer = document.querySelector('.user-profile-menu-container');
+    if (userContainer && !userContainer.contains(e.target)) {
+        closeUserDropdown();
+    }
+});
 
 
 // 7. Developer Profile & Session Credentials Management
@@ -512,8 +621,10 @@ function initProfileAndSession() {
         const inputName = document.getElementById('devProfileName');
         const hiddenName = document.getElementById('syncInputAuthorName');
 
-        if (topName) topName.textContent = savedName;
-        if (topAvatar) topAvatar.textContent = savedName.charAt(0).toUpperCase();
+        // Solo sobreescribir topbar si no se está impersonando activamente
+        const isImpersonating = topName && topName.querySelector('small');
+        if (topName && !isImpersonating) topName.textContent = savedName;
+        if (topAvatar && !isImpersonating) topAvatar.textContent = savedName.charAt(0).toUpperCase();
         if (inputName) inputName.value = savedName;
         if (hiddenName) hiddenName.value = savedName;
     }
@@ -598,9 +709,34 @@ function saveDeveloperProfile() {
     closeProfileModal();
 }
 
+// Manejo del menú overflow de acciones de la barra superior (Laptops compactas / Tablets / Celulares)
+function toggleTopbarOverflow(e) {
+    if (e) e.stopPropagation();
+    const menu = document.getElementById('topbarOverflowMenu');
+    if (menu) {
+        menu.classList.toggle('open');
+    }
+}
+
+function closeTopbarOverflow() {
+    const menu = document.getElementById('topbarOverflowMenu');
+    if (menu) {
+        menu.classList.remove('open');
+    }
+}
+
+// Cerrar overflow al hacer click fuera
+document.addEventListener('click', (e) => {
+    const container = document.getElementById('topbarOverflowContainer');
+    if (container && !container.contains(e.target)) {
+        closeTopbarOverflow();
+    }
+});
+
 // Interacciones y atajos globales inspirados en transitions-dev y minimalist-ui
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+        closeTopbarOverflow();
         const openModal = document.querySelector('.modal-layer.open');
         if (openModal) {
             smoothCloseModal(openModal);

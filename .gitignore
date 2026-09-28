@@ -38,6 +38,14 @@ composer.lock
 .DS_Store
 Thumbs.db
 
-# Planes y borradores internos de diseño
+# Planes y borradores internos de diseño / documentación
 *.plan.md
 db_git_migration_manager_plan.md
+docs/
+
+# Scripts de testing y ejecución local temporal
+test_*.php
+run-local.bat
+
+# Extensiones de agentes y skills locales
+.agents/
