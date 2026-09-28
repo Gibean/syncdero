@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Syncdero\Core;
 
+use Syncdero\Core\MigrationFile;
+use Syncdero\Drivers\DriverFactory;
 use Syncdero\Drivers\DriverInterface;
 
 class StateEngine
@@ -542,7 +544,7 @@ class StateEngine
         // Si hay una base de datos de referencia (Principal)
         if ($referenceEnvKey && isset($environments[$referenceEnvKey])) {
             try {
-                $refDriver = \Syncdero\Drivers\DriverFactory::create($environments[$referenceEnvKey]);
+                $refDriver = DriverFactory::create($environments[$referenceEnvKey]);
                 $refAppliedCount = method_exists($refDriver, 'getAppliedCount') ? $refDriver->getAppliedCount() : count($refDriver->getAppliedMigrations());
                 $refAppliedMap = ['_count_ready' => true];
             } catch (\Throwable) {
@@ -558,7 +560,7 @@ class StateEngine
             $role = $meta['role'] ?? ($envConfig['role'] ?? 'dev');
 
             try {
-                $driver = \Syncdero\Drivers\DriverFactory::create($envConfig);
+                $driver = DriverFactory::create($envConfig);
                 $appliedCount = method_exists($driver, 'getAppliedCount') ? $driver->getAppliedCount() : count($driver->getAppliedMigrations());
 
                 // Determinar estado frente a la BD Principal o disco
